@@ -26,7 +26,6 @@ def home():
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     logging.info(f"🌐 Starting Flask Web Server on Port {port}...")
-    # Use_reloader=False stops thread duplicate execution
     flask_app.run(host="0.0.0.0", port=port, use_reloader=False)
 
 # -------------------------------------------------------------
@@ -75,7 +74,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     pdf_path = f"temp_{msg.message_id}.pdf"
- 
 
     try:
         # 1. Direct PDF File
@@ -89,19 +87,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Non-blocking thread download
             download_success = await asyncio.to_thread(download_file, pdf_url, pdf_path)
             if not download_success:
-                await status_msg.edit_text("❌ PDF डाउनलोड करने में समस्या आई।")
                 return
         else:
-            await status_msg.edit_text("⚠️ कृपया एक PDF फ़ाइल या सही PDF लिंक भेजें।")
             return
 
         # Analyze PDF in a separate thread to prevent blocking the event loop
         result_tag = await asyncio.to_thread(analyze_pdf, pdf_path)
-        await status_msg.edit_text(f"🎯 यह फ़ाइल **{result_tag}** है!", parse_mode="Markdown")
+        
+        # Reply directly with only the tag
+        await msg.reply_text(result_tag)
 
     except Exception as e:
         logging.error(f"Error handling message: {e}")
-        await status_msg.edit_text("❌ फ़ाइल प्रोसेस करने में समस्या आई।")
 
     finally:
         if os.path.exists(pdf_path):
