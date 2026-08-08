@@ -1,8 +1,10 @@
 import os
 import re
 import logging
+import threading
 import requests
 import pdfplumber
+from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
@@ -12,6 +14,22 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 # Environment Variables
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
+# -------------------------------------------------------------
+# FLASK WEB SERVER (For Render Health Check)
+# -------------------------------------------------------------
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+def home():
+    return "Bot and Web Server are running active!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    flask_app.run(host="0.0.0.0", port=port)
+
+# -------------------------------------------------------------
+# PDF PROCESSING FUNCTIONS
+# -------------------------------------------------------------
 def download_file(url, output_path):
     """PDF डाउनलोड फ़ंक्शन"""
     try:
@@ -46,14 +64,19 @@ def analyze_pdf(pdf_path):
 
     return "@dpp" if dpp_score > notes_score else "@notes"
 
+# -------------------------------------------------------------
+# TELEGRAM BOT HANDLER
+# -------------------------------------------------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
+    if not msg:
+        return
+
     pdf_path = f"temp_{msg.message_id}.pdf"
-    
     status_msg = await msg.reply_text("⏳ PDF का विश्लेषण (Analyze) किया जा रहा है...")
 
     try:
-        # 1. अगर यूज़र ने PDF Document डायरेक्ट भेजा है
+        # 1. अगर यूज़र ने PDF Document सीधे भेजा है
         if msg.document and msg.document.mime_type == 'application/pdf':
             file = await context.bot.get_file(msg.document.file_id)
             await file.download_to_drive(pdf_path)
@@ -71,12 +94,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 3. Analyze PDF
         result_tag = analyze_pdf(pdf_path)
 
-        # 4. Telegram पर सीधा Reply देना
+        # 4. Telegram पर जवाब देना
         await status_msg.edit_text(f"🎯 यह फ़ाइल **{result_tag}** है!", parse_mode="Markdown")
 
     except Exception as e:
         logging.error(f"Error handling message: {e}")
-        await status_msg.edit_text("❌ फ़ाइल प्रोसेस करने में कोई गड़बड़ हुई।")
+        await status_msg.edit_text("❌ फ़ाइल प्रोसेस करने में समस्या आई।")
 
     finally:
         # 5. Auto Delete PDF File
@@ -84,15 +107,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.remove(pdf_path)
             logging.info(f"🧹 Temporary file {pdf_path} deleted.")
 
+# -------------------------------------------------------------
+# MAIN STARTUP
+# -------------------------------------------------------------
 if __name__ == "__main__":
     if not BOT_TOKEN:
         print("❌ BOT_TOKEN missing in Environment Variables!")
         exit(1)
 
+    # Web Server को बैकग्राउंड में चालू करना (Render Web Service सपोर्ट के लिए)
+    threading.Thread(target=run_flask, daemon=True).start()
+
+    # Telegram Bot शुरू करना
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    
-    # PDF Document या Links को हैंडल करने के लिए
     app.add_handler(MessageHandler(filters.DOCUMENT.MIME('application/pdf') | filters.TEXT, handle_message))
 
-    print("🤖 Telegram Bot Started!")
+    print("🚀 Web Server and Telegram Bot Started!")
     app.run_polling()
