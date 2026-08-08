@@ -75,7 +75,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     pdf_path = f"temp_{msg.message_id}.pdf"
-    status_msg = await msg.reply_text("⏳ PDF का विश्लेषण (Analyze) किया जा रहा है...")
+ 
 
     try:
         # 1. Direct PDF File
