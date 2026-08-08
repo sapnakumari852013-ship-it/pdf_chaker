@@ -1,7 +1,5 @@
 import os
-import re
 import logging
-import asyncio
 import threading
 import requests
 import pdfplumber
@@ -16,13 +14,13 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 # -------------------------------------------------------------
-# FLASK WEB SERVER (For Render Health Check)
+# FLASK WEB SERVER (Render Port Binding ke liye)
 # -------------------------------------------------------------
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
 def home():
-    return "Bot and Web Server are running active!", 200
+    return "Bot is Active and Running!", 200
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -109,11 +107,10 @@ if __name__ == "__main__":
         logging.error("❌ BOT_TOKEN missing!")
         exit(1)
 
-    # Flask ko separate thread me chalayein
-    t = threading.Thread(target=run_flask, daemon=True)
-    t.start()
+    # 1. Start Web Server in Background
+    threading.Thread(target=run_flask, daemon=True).start()
 
-    # Telegram Bot Start
+    # 2. Start Telegram Bot
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(MessageHandler(filters.DOCUMENT.MIME('application/pdf') | filters.TEXT, handle_message))
 
