@@ -1,5 +1,4 @@
-python-telegram-bot==20.8
+python-telegram-bot==21.1.1
 requests==2.31.0
 pdfplumber==0.11.0
 flask==3.0.3
-gunicorn==22.0.0
