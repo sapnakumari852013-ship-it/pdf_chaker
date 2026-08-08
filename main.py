@@ -74,10 +74,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await msg.reply_text("⏳ PDF का विश्लेषण (Analyze) किया जा रहा है...")
 
     try:
-        if msg.document and msg.document.mime_type == 'application/pdf':
+        # 1. Agar Direct PDF Document aaya hai
+        if msg.document:
             file = await context.bot.get_file(msg.document.file_id)
             await file.download_to_drive(pdf_path)
             
+        # 2. Agar PDF ka Direct Link aaya hai
         elif msg.text and (msg.text.startswith("http://") or msg.text.startswith("https://")):
             pdf_url = msg.text.strip()
             if not download_file(pdf_url, pdf_path):
@@ -107,12 +109,14 @@ if __name__ == "__main__":
         logging.error("❌ BOT_TOKEN missing!")
         exit(1)
 
-    # 1. Start Web Server in Background
+    # 1. Start Web Server in Background Thread
     threading.Thread(target=run_flask, daemon=True).start()
 
     # 2. Start Telegram Bot
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(MessageHandler(filters.DOCUMENT.MIME('application/pdf') | filters.TEXT, handle_message))
+    
+    # Correct Syntax for v20+ filters
+    app.add_handler(MessageHandler(filters.Document.ALL | filters.TEXT, handle_message))
 
     logging.info("🚀 Starting Telegram Bot Polling...")
     app.run_polling(drop_pending_updates=True)
