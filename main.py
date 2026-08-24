@@ -30,10 +30,8 @@ async def get_gallery():
             return jsonify([])
 
         photos = []
-        # टेलीग्राम से हालिया 100 मैसेज चेक करना
         async for msg in client.iter_messages(CHANNEL, limit=100):
             if msg.photo and msg.text:
-                # सिर्फ उसी 5-अंक की ID वाले मैसेजेस फिल्टर करना
                 if f"DEV-{device_id}" in msg.text:
                     photos.append(
                         {
@@ -47,7 +45,7 @@ async def get_gallery():
         return jsonify({"error": str(e)}), 500
 
 
-# 2. Telegram से फोटो स्ट्रीम करना (0% Storage)
+# 2. Telegram से फोटो स्ट्रीम करना
 @app.route("/api/photo/<int:msg_id>", methods=["GET"])
 async def get_photo(msg_id):
     try:
@@ -64,7 +62,7 @@ async def get_photo(msg_id):
         return str(e), 500
 
 
-# 3. यूजर द्वारा चुनी गई फोटो Telegram में सही फॉर्मेट में अपलोड करना
+# 3. फोटो अपलोड (Fixed Quart File Handling)
 @app.route("/api/upload", methods=["POST"])
 async def upload_photo():
     try:
@@ -76,9 +74,10 @@ async def upload_photo():
             return jsonify({"error": "File or Device ID missing"}), 400
 
         file = files["file"]
-        file_bytes = await file.read()
 
-        # unnamed समस्या को ठीक करने के लिए नाम सेट करना
+        # Quart में file.read() एक साधारण method होता है, इसे await नहीं करना है
+        file_bytes = file.read()
+
         img_io = io.BytesIO(file_bytes)
         img_io.name = file.filename or "photo.jpg"
 
