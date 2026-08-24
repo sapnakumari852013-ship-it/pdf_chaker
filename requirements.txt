@@ -1,4 +1,4 @@
 telethon
-flask
-flask-cors
-gunicorn
+quart
+quart-cors
+hypercorn
