@@ -16,27 +16,38 @@ CHANNEL = "sxhckfufig"
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 
-# 1. फोटो गैलरी फ़ैच करना (Telegram से ऑन-डिमांड)
+@app.route("/")
+async def home():
+    return "Private Cloud Gallery Server Active!", 200
+
+
+# 1. यूजर की डिवाइस ID के हिसाब से फोटो फैच करना
 @app.route("/api/gallery", methods=["GET"])
 async def get_gallery():
     try:
+        device_id = request.args.get("device_id", "")
+        if not device_id:
+            return jsonify([])
+
         photos = []
-        async for msg in client.iter_messages(CHANNEL, limit=50):
-            if msg.photo:
-                # टेलीग्राम फोटो को सीधे URL/Bytes की तरह Serve करने के लिए
-                photos.append(
-                    {
-                        "id": msg.id,
-                        "date": msg.date.isoformat(),
-                        "url": f"https://pdf-chaker-1.onrender.com/api/photo/{msg.id}",
-                    }
-                )
+        # टेलीग्राम से हालिया 100 मैसेज चेक करना
+        async for msg in client.iter_messages(CHANNEL, limit=100):
+            if msg.photo and msg.text:
+                # सिर्फ उसी 5-अंक की ID वाले मैसेजेस फिल्टर करना
+                if f"DEV-{device_id}" in msg.text:
+                    photos.append(
+                        {
+                            "id": msg.id,
+                            "date": msg.date.isoformat(),
+                            "url": f"https://pdf-chaker-1.onrender.com/api/photo/{msg.id}",
+                        }
+                    )
         return jsonify(photos)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-# 2. टेलीग्राम से फोटो डाउनलोड करके HTML को दिखाना
+# 2. Telegram से फोटो स्ट्रीम करना (0% Storage)
 @app.route("/api/photo/<int:msg_id>", methods=["GET"])
 async def get_photo(msg_id):
     try:
@@ -53,28 +64,39 @@ async def get_photo(msg_id):
         return str(e), 500
 
 
-# 3. HTML से फोटो टेलीग्राम चैनल में अपलोड करना
+# 3. यूजर द्वारा चुनी गई फोटो Telegram में सही फॉर्मेट में अपलोड करना
 @app.route("/api/upload", methods=["POST"])
 async def upload_photo():
     try:
         files = await request.files
-        if "file" not in files:
-            return jsonify({"error": "No file uploaded"}), 400
+        form_data = await request.form
+
+        device_id = form_data.get("device_id", "")
+        if "file" not in files or not device_id:
+            return jsonify({"error": "File or Device ID missing"}), 400
 
         file = files["file"]
-        file_bytes = file.read()
+        file_bytes = await file.read()
 
-        # टेलीग्राम चैनल में फोटो भेजना
-        await client.send_file(CHANNEL, io.BytesIO(file_bytes), voice_note=False)
-        return jsonify({"success": True, "message": "Photo uploaded to Telegram!"})
+        # unnamed समस्या को ठीक करने के लिए नाम सेट करना
+        img_io = io.BytesIO(file_bytes)
+        img_io.name = file.filename or "photo.jpg"
+
+        caption = f"DEV-{device_id}"
+        await client.send_file(
+            CHANNEL, img_io, caption=caption, force_document=False
+        )
+
+        return jsonify({"success": True, "message": "Uploaded successfully!"})
     except Exception as e:
+        print(f"Upload error: {e}", flush=True)
         return jsonify({"error": str(e)}), 500
 
 
 @app.before_serving
 async def startup():
     await client.start()
-    print("Gallery Server Live!", flush=True)
+    print("Private Gallery Server Ready!", flush=True)
 
 
 if __name__ == "__main__":
