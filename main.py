@@ -18,10 +18,10 @@ client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 @app.route("/")
 async def home():
-    return "Private Cloud Gallery Server Active!", 200
+    return "Private Cloud Server Active!", 200
 
 
-# 1. टेलीग्राम चैनल पर पासवर्ड सेट/रजिस्टर करना
+# 1. पासवर्ड रजिस्टर करना
 @app.route("/api/register", methods=["POST"])
 async def register_user():
     try:
@@ -32,7 +32,6 @@ async def register_user():
         if not device_id or not password:
             return jsonify({"success": False, "error": "Missing ID or Password"}), 400
 
-        # चेक करें कि क्या इस ID का पासवर्ड पहले से मौजूद है
         async for msg in client.iter_messages(CHANNEL, limit=200):
             if msg.text and msg.text.startswith(f"PASS-{device_id}:"):
                 return (
@@ -45,7 +44,6 @@ async def register_user():
                     400,
                 )
 
-        # चैनल पर पासवर्ड सेव करें
         await client.send_message(CHANNEL, f"PASS-{device_id}:{password}")
         return jsonify(
             {"success": True, "message": "Password saved successfully!"}
@@ -54,7 +52,7 @@ async def register_user():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 2. टेलीग्राम चैनल से पासवर्ड मैच करके लॉगिन करना
+# 2. पासवर्ड मैच करके लॉगिन करना
 @app.route("/api/login", methods=["POST"])
 async def login_user():
     try:
@@ -66,7 +64,6 @@ async def login_user():
             return jsonify({"success": False, "error": "Missing ID or Password"}), 400
 
         saved_password = None
-        # टेलीग्राम चैनल से पासवर्ड ढूँढना
         async for msg in client.iter_messages(CHANNEL, limit=500):
             if msg.text and msg.text.startswith(f"PASS-{device_id}:"):
                 saved_password = msg.text.split(":", 1)[1]
@@ -75,7 +72,7 @@ async def login_user():
         if not saved_password:
             return (
                 jsonify(
-                    {"success": False, "error": "यह ID टेलीग्राम पर मौजूद नहीं है!"}
+                    {"success": False, "error": "यह ID हमारे क्लाउड पर मौजूद नहीं है!"}
                 ),
                 404,
             )
@@ -141,16 +138,16 @@ async def get_photo(msg_id):
 @app.route("/api/upload", methods=["POST"])
 async def upload_photo():
     try:
-        files = await request.files
         form_data = await request.form
+        files = await request.files
 
         device_id = form_data.get("device_id", "")
-        if "file" not in files or not device_id:
+        file = files.get("file")
+
+        if not file or not device_id:
             return jsonify({"error": "File or Device ID missing"}), 400
 
-        file = files["file"]
         file_bytes = file.read()
-
         img_io = io.BytesIO(file_bytes)
         img_io.name = file.filename or "photo.jpg"
 
@@ -159,9 +156,28 @@ async def upload_photo():
             CHANNEL, img_io, caption=caption, force_document=False
         )
 
-        return jsonify({"success": True, "message": "Uploaded successfully!"})
+        return jsonify({"success": True, "message": "Photo uploaded successfully!"})
     except Exception as e:
         print(f"Upload error: {e}", flush=True)
+        return jsonify({"error": str(e)}), 500
+
+
+# 6. फोटो डिलीट करना
+@app.route("/api/delete", methods=["POST"])
+async def delete_photos():
+    try:
+        data = await request.get_json()
+        photo_ids = data.get("photo_ids", [])
+
+        if not photo_ids:
+            return jsonify({"error": "No photo IDs provided"}), 400
+
+        # मैसेज आईडी को डिलीट करना
+        await client.delete_messages(CHANNEL, photo_ids)
+        return jsonify(
+            {"success": True, "message": "Photos deleted successfully!"}
+        )
+    except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
