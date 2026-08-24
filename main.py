@@ -1,9 +1,9 @@
 import asyncio
 import os
 import threading
-from flask import Flask, Response, jsonify
+from flask import Flask, jsonify
 from flask_cors import CORS
-from telethon import TelegramClient, events
+from telethon import TelegramClient
 from telethon.sessions import StringSession
 
 app = Flask(__name__)
@@ -14,19 +14,18 @@ API_HASH = os.environ.get("API_HASH", "YOUR_API_HASH")
 SESSION_STRING = os.environ.get("SESSION_STRING", "YOUR_STRING_SESSION")
 CHANNEL = "sxhckfufig"
 
-client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-
+# Async Loop और Telethon Client
 loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH, loop=loop)
 
 
-def run_async_loop():
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(client.start())
-    print("Telethon Client Connected and Ready!", flush=True)
-    loop.run_forever()
+@app.route("/")
+def home():
+    return "Server is Active (Zero-Storage)", 200
 
 
-# 1. सीधे Telegram से मैसेज इतिहास (History) लाकर HTML को देना (Render में 0% storage)
+# सीधे Telegram Server से On-Demand 100 Messages खींचकर HTML को देना
 @app.route("/api/history")
 def get_history():
     async def fetch_history():
@@ -41,18 +40,29 @@ def get_history():
                 )
         return messages
 
-    future = asyncio.run_coroutine_threadsafe(fetch_history(), loop)
-    return jsonify(future.result())
+    try:
+        # Background Event Loop में सुरक्षित Execution
+        future = asyncio.run_coroutine_threadsafe(fetch_history(), loop)
+        data = future.result(timeout=15)
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+def start_telethon_thread():
+    async def main():
+        await client.start()
+        print(f"Telethon Connected Successfully to @{CHANNEL}!", flush=True)
+
+    loop.run_until_complete(main())
 
 
 if __name__ == "__main__":
-    t = threading.Thread(target=run_async_loop)
+    # 1. Telethon Connection को स्टार्ट करें
+    t = threading.Thread(target=start_telethon_thread)
     t.daemon = True
     t.start()
 
-    run_flask()
+    # 2. Flask Server चलाएं
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
