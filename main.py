@@ -1,180 +1,278 @@
+import io
 import os
-import asyncio
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from pyrogram import Client
+from quart import Quart, jsonify, request
+from quart_cors import cors
+from telethon import TelegramClient
+from telethon.sessions import StringSession
+from telethon.tl.functions.messages import ImportChatInviteRequest
 
-app = Flask(__name__)
-CORS(app)
+app = Quart(__name__)
+app = cors(app, allow_origin="*")
 
-# Render Environment Variables से रीड करना
-API_ID = os.environ.get("API_ID")
-API_HASH = os.environ.get("API_HASH")
-SESSION_STRING = os.environ.get("SESSION_STRING")
-CHANNEL_ID = int(os.environ.get("CHANNEL_ID"))  # चैनल ID को integer होना चाहिए (e.g. -100xxxx)
+API_ID = int(os.environ.get("API_ID", 1234567))
+API_HASH = os.environ.get("API_HASH", "YOUR_API_HASH")
+SESSION_STRING = os.environ.get("SESSION_STRING", "YOUR_STRING_SESSION")
 
-# Pyrogram Client Start
-pyrogram_app = Client(
-    "telegram_bridge",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    session_string=SESSION_STRING,
-    in_memory=True
-)
-pyrogram_app.start()
+# ⚠️ यहाँ अपने प्राइवेट चैनल की -100 वाली ID डालें (बिना Quotes के int रूप में या int में कन्वर्ट करके)
+CHANNEL = int(os.environ.get("CHANNEL_ID", -1001234567890))
+INVITE_HASH = "EG28t-T1YdY0NjA1"  # आपके लिंक का हैश कोड
 
-# Helper: Async function run करने के लिए
-def run_async(coro):
-    return asyncio.run(coro)
+client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-# ----------------- Profile Photo Endpoints -----------------
 
-async def async_upload_pfp(device_id, file_path, filename):
-    # 1. पुराना PFP ढूंढकर डिलीट करना
-    async for msg in pyrogram_app.get_chat_history(CHANNEL_ID, limit=100):
-        if msg.caption == f"PFP|{device_id}":
-            await pyrogram_app.delete_messages(CHANNEL_ID, msg.id)
-            break
+@app.route("/")
+async def home():
+    return "Private Cloud Server Active!", 200
 
-    # 2. नया PFP अपलोड करना
-    msg = await pyrogram_app.send_photo(CHANNEL_ID, photo=file_path, caption=f"PFP|{device_id}")
-    file_url = await pyrogram_app.download_media(msg.photo, file_name=f"temp_{msg.id}.jpg")
-    return file_url
 
-@app.route('/api/upload-pfp', methods=['POST'])
-def upload_pfp():
-    device_id = request.form.get('device_id')
-    if 'file' not in request.files or not device_id:
-        return jsonify({'success': False, 'error': 'Missing parameters'}), 400
-
-    file = request.files['file']
-    temp_path = f"temp_{file.filename}"
-    file.save(temp_path)
-
+# 1. पासवर्ड रजिस्टर करना
+@app.route("/api/register", methods=["POST"])
+async def register_user():
     try:
-        run_async(async_upload_pfp(device_id, temp_path, file.filename))
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-        return jsonify({'success': True})
+        data = await request.get_json()
+        device_id = data.get("device_id")
+        password = data.get("password")
+
+        if not device_id or not password:
+            return jsonify({"success": False, "error": "Missing ID or Password"}), 400
+
+        async for msg in client.iter_messages(CHANNEL, limit=200):
+            if msg.text and msg.text.startswith(f"PASS-{device_id}:"):
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": "यह ID पहले से रजिस्टर्ड है! कृपया लॉगिन करें।",
+                        }
+                    ),
+                    400,
+                )
+
+        await client.send_message(CHANNEL, f"PASS-{device_id}:{password}")
+        return jsonify(
+            {"success": True, "message": "Password saved successfully!"}
+        )
     except Exception as e:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
-async def async_get_pfp(device_id):
-    async for msg in pyrogram_app.get_chat_history(CHANNEL_ID, limit=100):
-        if msg.caption == f"PFP|{device_id}" and msg.photo:
-            # Telegram से फ़ाइल डाउनलोड करके URL/Data के रूप में देना
-            return msg.photo.file_id
-    return None
-
-@app.route('/api/get-pfp', methods=['GET'])
-def get_pfp():
-    device_id = request.args.get('device_id')
+# 2. पासवर्ड मैच करके लॉगिन करना
+@app.route("/api/login", methods=["POST"])
+async def login_user():
     try:
-        photo_id = run_async(async_get_pfp(device_id))
-        if photo_id:
-            return jsonify({'success': True, 'url': f"https://api.telegram.org/file/..."}) # PFP URL
-        return jsonify({'success': False, 'url': None})
+        data = await request.get_json()
+        device_id = data.get("device_id")
+        password = data.get("password")
+
+        if not device_id or not password:
+            return jsonify({"success": False, "error": "Missing ID or Password"}), 400
+
+        saved_password = None
+        async for msg in client.iter_messages(CHANNEL, limit=500):
+            if msg.text and msg.text.startswith(f"PASS-{device_id}:"):
+                saved_password = msg.text.split(":", 1)[1]
+                break
+
+        if not saved_password:
+            return (
+                jsonify(
+                    {"success": False, "error": "यह ID हमारे क्लाउड पर मौजूद नहीं है!"}
+                ),
+                404,
+            )
+
+        if saved_password != password:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "गलत पासवर्ड! (Invalid Password)",
+                    }
+                ),
+                401,
+            )
+
+        return jsonify({"success": True, "message": "Login successful!"})
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({"success": False, "error": str(e)}), 500
 
-# ----------------- Normal Photo Gallery -----------------
 
-async def async_upload_gallery(device_id, file_path):
-    await pyrogram_app.send_photo(CHANNEL_ID, photo=file_path, caption=f"PHOTO|{device_id}")
-
-@app.route('/api/upload', methods=['POST'])
-def upload_photo():
-    device_id = request.form.get('device_id')
-    if 'file' not in request.files or not device_id:
-        return jsonify({'success': False}), 400
-
-    file = request.files['file']
-    temp_path = f"temp_gal_{file.filename}"
-    file.save(temp_path)
-
+# 3. गैलरी फोटो फेच करना
+@app.route("/api/gallery", methods=["GET"])
+async def get_gallery():
     try:
-        run_async(async_upload_gallery(device_id, temp_path))
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-        return jsonify({'success': True})
-    except Exception as e:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-        return jsonify({'success': False, 'error': str(e)}), 500
+        device_id = request.args.get("device_id", "")
+        if not device_id:
+            return jsonify([])
 
-
-async def async_get_gallery(device_id):
-    photos = []
-    async for msg in pyrogram_app.get_chat_history(CHANNEL_ID, limit=100):
-        if msg.caption == f"PHOTO|{device_id}" and msg.photo:
-            photos.append({
-                'id': msg.id,
-                'date': int(msg.date.timestamp())
-            })
-    return photos
-
-@app.route('/api/gallery', methods=['GET'])
-def get_gallery():
-    device_id = request.args.get('device_id')
-    try:
-        photos = run_async(async_get_gallery(device_id))
+        photos = []
+        async for msg in client.iter_messages(CHANNEL, limit=200):
+            if msg.photo and msg.text:
+                if f"DEV-{device_id}" in msg.text:
+                    photos.append(
+                        {
+                            "id": msg.id,
+                            "date": msg.date.isoformat(),
+                            "url": f"https://pdf-chaker-1.onrender.com/api/photo/{msg.id}",
+                        }
+                    )
         return jsonify(photos)
     except Exception as e:
-        return jsonify([])
+        return jsonify({"error": str(e)}), 500
 
-# ----------------- Delete & Notes Endpoints -----------------
 
-async def async_delete_msgs(msg_ids):
-    await pyrogram_app.delete_messages(CHANNEL_ID, msg_ids)
-
-@app.route('/api/delete', methods=['POST'])
-def delete_photos():
-    data = request.json
-    msg_ids = data.get('photo_ids', [])
-    if msg_ids:
-        run_async(async_delete_msgs(msg_ids))
-    return jsonify({'success': True})
-
-async def async_get_notes(device_id):
-    notes = []
-    async for msg in pyrogram_app.get_chat_history(CHANNEL_ID, limit=100):
-        if msg.text and msg.text.startswith(f"NOTE|{device_id}|"):
-            text = msg.text.split(f"NOTE|{device_id}|")[1]
-            notes.append({'id': msg.id, 'text': text})
-    return notes
-
-@app.route('/api/notes', methods=['GET'])
-def get_notes():
-    device_id = request.args.get('device_id')
+# 4. फोटो स्ट्रीम करना
+@app.route("/api/photo/<int:msg_id>", methods=["GET"])
+async def get_photo(msg_id):
     try:
-        notes = run_async(async_get_notes(device_id))
+        msg = await client.get_messages(CHANNEL, ids=msg_id)
+        if msg and msg.photo:
+            photo_bytes = await client.download_media(msg.photo, file=bytes)
+            return (
+                photo_bytes,
+                200,
+                {"Content-Type": "image/jpeg", "Cache-Control": "max-age=86400"},
+            )
+        return "Photo Not Found", 404
+    except Exception as e:
+        return str(e), 500
+
+
+# 5. फोटो अपलोड करना
+@app.route("/api/upload", methods=["POST"])
+async def upload_photo():
+    try:
+        form_data = await request.form
+        files = await request.files
+
+        device_id = form_data.get("device_id", "")
+        file = files.get("file")
+
+        if not file or not device_id:
+            return jsonify({"error": "File or Device ID missing"}), 400
+
+        file_bytes = file.read()
+        img_io = io.BytesIO(file_bytes)
+        img_io.name = file.filename or "photo.jpg"
+
+        caption = f"DEV-{device_id}"
+        await client.send_file(
+            CHANNEL, img_io, caption=caption, force_document=False
+        )
+
+        return jsonify({"success": True, "message": "Photo uploaded successfully!"})
+    except Exception as e:
+        print(f"Upload error: {e}", flush=True)
+        return jsonify({"error": str(e)}), 500
+
+
+# 6. फोटो/मैसेज डिलीट करना
+@app.route("/api/delete", methods=["POST"])
+async def delete_photos():
+    try:
+        data = await request.get_json()
+        photo_ids = data.get("photo_ids", [])
+
+        if not photo_ids:
+            return jsonify({"error": "No photo IDs provided"}), 400
+
+        await client.delete_messages(CHANNEL, photo_ids)
+        return jsonify(
+            {"success": True, "message": "Photos deleted successfully!"}
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# 7. नोट्स सेव करना
+@app.route("/api/notes/add", methods=["POST"])
+async def save_note():
+    try:
+        data = await request.get_json()
+        device_id = data.get("device_id")
+        note_content = data.get("text") or data.get("note")
+
+        if not device_id or not note_content:
+            return jsonify({"success": False, "error": "Missing Device ID or Note content"}), 400
+
+        await client.send_message(CHANNEL, f"NOTE-{device_id}:{note_content}")
+        return jsonify({"success": True, "message": "Note saved successfully!"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# 8. नोट्स फेच करना
+@app.route("/api/notes", methods=["GET"])
+async def get_notes():
+    try:
+        device_id = request.args.get("device_id", "")
+        if not device_id:
+            return jsonify([])
+
+        notes = []
+        async for msg in client.iter_messages(CHANNEL, limit=300):
+            if msg.text and msg.text.startswith(f"NOTE-{device_id}:"):
+                content = msg.text.split(":", 1)[1]
+                notes.append({
+                    "id": msg.id,
+                    "date": msg.date.isoformat(),
+                    "text": content
+                })
         return jsonify(notes)
     except Exception as e:
-        return jsonify([])
+        return jsonify({"error": str(e)}), 500
 
-async def async_add_note(device_id, text):
-    await pyrogram_app.send_message(CHANNEL_ID, f"NOTE|{device_id}|{text}")
 
-@app.route('/api/notes/add', methods=['POST'])
-def add_note():
-    data = request.json
-    run_async(async_add_note(data['device_id'], data['text']))
-    return jsonify({'success': True})
+# 9. नोट एडिट करना
+@app.route("/api/notes/edit", methods=["POST"])
+async def edit_note():
+    try:
+        data = await request.get_json()
+        device_id = data.get("device_id")
+        note_id = data.get("note_id")
+        new_text = data.get("text")
 
-@app.route('/api/notes/delete', methods=['POST'])
-def delete_note():
-    data = request.json
-    run_async(async_delete_msgs([data['note_id']]))
-    return jsonify({'success': True})
+        if not device_id or not note_id or not new_text:
+            return jsonify({"success": False, "error": "Missing details"}), 400
 
-@app.route('/api/register', methods=['POST'])
-@app.route('/api/login', methods=['POST'])
-def auth():
-    return jsonify({'success': True})
+        await client.edit_message(CHANNEL, int(note_id), f"NOTE-{device_id}:{new_text}")
+        return jsonify({"success": True, "message": "Note updated successfully!"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+
+# 10. नोट डिलीट करना
+@app.route("/api/notes/delete", methods=["POST"])
+async def delete_note():
+    try:
+        data = await request.get_json()
+        note_id = data.get("note_id")
+
+        if not note_id:
+            return jsonify({"success": False, "error": "Note ID missing"}), 400
+
+        await client.delete_messages(CHANNEL, [int(note_id)])
+        return jsonify({"success": True, "message": "Note deleted successfully!"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.before_serving
+async def startup():
+    await client.start()
+    try:
+        # इनवाइट लिंक के जरिए प्राइवेट चैनल जॉइन करने का प्रयास
+        await client(ImportChatInviteRequest(INVITE_HASH))
+    except Exception:
+        pass  # यदि अकाउंट पहले से चैनल में है तो एरर स्किप होगा
+    print("Private Cloud Server Ready!", flush=True)
+
+
+if __name__ == "__main__":
+    import asyncio
+    import hypercorn.asyncio
+    from hypercorn.config import Config
+
+    config = Config()
+    config.bind = [f"0.0.0.0:{os.environ.get('PORT', 10000)}"]
+    asyncio.run(hypercorn.asyncio.serve(app, config))
