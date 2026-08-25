@@ -1,10 +1,12 @@
 import io
+import json
 import os
+import firebase_admin
+from firebase_admin import credentials, db
 from quart import Quart, jsonify, request
 from quart_cors import cors
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-from telethon.tl.functions.messages import ImportChatInviteRequest
 
 app = Quart(__name__)
 app = cors(app, allow_origin="*")
@@ -12,20 +14,27 @@ app = cors(app, allow_origin="*")
 API_ID = int(os.environ.get("API_ID", 1234567))
 API_HASH = os.environ.get("API_HASH", "YOUR_API_HASH")
 SESSION_STRING = os.environ.get("SESSION_STRING", "YOUR_STRING_SESSION")
-
-# ⚠️ यहाँ अपने प्राइवेट चैनल की -100 वाली ID डालें (बिना Quotes के int रूप में या int में कन्वर्ट करके)
 CHANNEL = int(os.environ.get("CHANNEL_ID", -1001234567890))
-INVITE_HASH = "EG28t-T1YdY0NjA1"  # आपके लिंक का हैश कोड
+FIREBASE_DB_URL = os.environ.get("FIREBASE_DB_URL")
+
+# ----------------- FIREBASE SETUP -----------------
+cred_json_str = os.environ.get("FIREBASE_CRED_JSON")
+
+if cred_json_str and not firebase_admin._apps:
+    cred_dict = json.loads(cred_json_str)
+    cred = credentials.Certificate(cred_dict)
+    firebase_admin.initialize_app(cred, {"databaseURL": FIREBASE_DB_URL})
+# --------------------------------------------------
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 
 @app.route("/")
 async def home():
-    return "Private Cloud Server Active!", 200
+    return "Private Cloud Server Active with Firebase!", 200
 
 
-# 1. पासवर्ड रजिस्टर करना
+# 1. रजिस्टर करना (Firebase DB)
 @app.route("/api/register", methods=["POST"])
 async def register_user():
     try:
@@ -36,27 +45,17 @@ async def register_user():
         if not device_id or not password:
             return jsonify({"success": False, "error": "Missing ID or Password"}), 400
 
-        async for msg in client.iter_messages(CHANNEL, limit=200):
-            if msg.text and msg.text.startswith(f"PASS-{device_id}:"):
-                return (
-                    jsonify(
-                        {
-                            "success": False,
-                            "error": "यह ID पहले से रजिस्टर्ड है! कृपया लॉगिन करें।",
-                        }
-                    ),
-                    400,
-                )
+        user_ref = db.reference(f"users/{device_id}")
+        if user_ref.get():
+            return jsonify({"success": False, "error": "यह ID पहले से रजिस्टर्ड है!"}), 400
 
-        await client.send_message(CHANNEL, f"PASS-{device_id}:{password}")
-        return jsonify(
-            {"success": True, "message": "Password saved successfully!"}
-        )
+        user_ref.set({"password": password})
+        return jsonify({"success": True, "message": "Password saved successfully!"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 2. पासवर्ड मैच करके लॉगिन करना
+# 2. लॉगिन करना (Firebase DB)
 @app.route("/api/login", methods=["POST"])
 async def login_user():
     try:
@@ -67,78 +66,19 @@ async def login_user():
         if not device_id or not password:
             return jsonify({"success": False, "error": "Missing ID or Password"}), 400
 
-        saved_password = None
-        async for msg in client.iter_messages(CHANNEL, limit=500):
-            if msg.text and msg.text.startswith(f"PASS-{device_id}:"):
-                saved_password = msg.text.split(":", 1)[1]
-                break
+        user_data = db.reference(f"users/{device_id}").get()
+        if not user_data:
+            return jsonify({"success": False, "error": "यह ID मौजूद नहीं है!"}), 404
 
-        if not saved_password:
-            return (
-                jsonify(
-                    {"success": False, "error": "यह ID हमारे क्लाउड पर मौजूद नहीं है!"}
-                ),
-                404,
-            )
-
-        if saved_password != password:
-            return (
-                jsonify(
-                    {
-                        "success": False,
-                        "error": "गलत पासवर्ड! (Invalid Password)",
-                    }
-                ),
-                401,
-            )
+        if user_data.get("password") != password:
+            return jsonify({"success": False, "error": "गलत पासवर्ड!"}), 401
 
         return jsonify({"success": True, "message": "Login successful!"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 3. गैलरी फोटो फेच करना
-@app.route("/api/gallery", methods=["GET"])
-async def get_gallery():
-    try:
-        device_id = request.args.get("device_id", "")
-        if not device_id:
-            return jsonify([])
-
-        photos = []
-        async for msg in client.iter_messages(CHANNEL, limit=200):
-            if msg.photo and msg.text:
-                if f"DEV-{device_id}" in msg.text:
-                    photos.append(
-                        {
-                            "id": msg.id,
-                            "date": msg.date.isoformat(),
-                            "url": f"https://pdf-chaker-1.onrender.com/api/photo/{msg.id}",
-                        }
-                    )
-        return jsonify(photos)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-# 4. फोटो स्ट्रीम करना
-@app.route("/api/photo/<int:msg_id>", methods=["GET"])
-async def get_photo(msg_id):
-    try:
-        msg = await client.get_messages(CHANNEL, ids=msg_id)
-        if msg and msg.photo:
-            photo_bytes = await client.download_media(msg.photo, file=bytes)
-            return (
-                photo_bytes,
-                200,
-                {"Content-Type": "image/jpeg", "Cache-Control": "max-age=86400"},
-            )
-        return "Photo Not Found", 404
-    except Exception as e:
-        return str(e), 500
-
-
-# 5. फोटो अपलोड करना
+# 3. फोटो अपलोड करना (Telegram + Firebase)
 @app.route("/api/upload", methods=["POST"])
 async def upload_photo():
     try:
@@ -156,35 +96,76 @@ async def upload_photo():
         img_io.name = file.filename or "photo.jpg"
 
         caption = f"DEV-{device_id}"
-        await client.send_file(
-            CHANNEL, img_io, caption=caption, force_document=False
-        )
+        msg = await client.send_file(CHANNEL, img_io, caption=caption, force_document=False)
+
+        # ⚡ Telegram मैसेज स्कैन की जगह Firebase में ID सेव करें
+        db.reference(f"photos/{device_id}/{msg.id}").set({
+            "id": msg.id,
+            "date": msg.date.isoformat(),
+            "url": f"https://pdf-chaker-1.onrender.com/api/photo/{msg.id}"
+        })
 
         return jsonify({"success": True, "message": "Photo uploaded successfully!"})
     except Exception as e:
-        print(f"Upload error: {e}", flush=True)
         return jsonify({"error": str(e)}), 500
 
 
-# 6. फोटो/मैसेज डिलीट करना
+# 4. गैलरी फोटो फेच करना (सुपरफास्ट - Firebase से)
+@app.route("/api/gallery", methods=["GET"])
+async def get_gallery():
+    try:
+        device_id = request.args.get("device_id", "")
+        if not device_id:
+            return jsonify([])
+
+        photos_data = db.reference(f"photos/{device_id}").get()
+        if not photos_data:
+            return jsonify([])
+
+        return jsonify(list(photos_data.values()))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# 5. फोटो डिलीट करना (Telegram + Firebase)
 @app.route("/api/delete", methods=["POST"])
 async def delete_photos():
     try:
         data = await request.get_json()
+        device_id = data.get("device_id")
         photo_ids = data.get("photo_ids", [])
 
-        if not photo_ids:
-            return jsonify({"error": "No photo IDs provided"}), 400
+        if not photo_ids or not device_id:
+            return jsonify({"error": "No photo IDs or Device ID provided"}), 400
 
         await client.delete_messages(CHANNEL, photo_ids)
-        return jsonify(
-            {"success": True, "message": "Photos deleted successfully!"}
-        )
+
+        for pid in photo_ids:
+            db.reference(f"photos/{device_id}/{pid}").delete()
+
+        return jsonify({"success": True, "message": "Photos deleted successfully!"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-# 7. नोट्स सेव करना
+# 6. फोटो स्ट्रीम करना
+@app.route("/api/photo/<int:msg_id>", methods=["GET"])
+async def get_photo(msg_id):
+    try:
+        msg = await client.get_messages(CHANNEL, ids=msg_id)
+        if msg and msg.photo:
+            photo_bytes = await client.download_media(msg.photo, file=bytes)
+            return (
+                photo_bytes,
+                200,
+                {"Content-Type": "image/jpeg", "Cache-Control": "max-age=86400"},
+            )
+        return "Photo Not Found", 404
+    except Exception as e:
+        return str(e), 500
+
+
+# 7. नोट्स सेव करना (Firebase)
 @app.route("/api/notes/add", methods=["POST"])
 async def save_note():
     try:
@@ -195,13 +176,17 @@ async def save_note():
         if not device_id or not note_content:
             return jsonify({"success": False, "error": "Missing Device ID or Note content"}), 400
 
-        await client.send_message(CHANNEL, f"NOTE-{device_id}:{note_content}")
+        new_ref = db.reference(f"notes/{device_id}").push()
+        new_ref.set({
+            "id": new_ref.key,
+            "text": note_content
+        })
         return jsonify({"success": True, "message": "Note saved successfully!"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 8. नोट्स फेच करना
+# 8. नोट्स फेच करना (Firebase)
 @app.route("/api/notes", methods=["GET"])
 async def get_notes():
     try:
@@ -209,63 +194,19 @@ async def get_notes():
         if not device_id:
             return jsonify([])
 
-        notes = []
-        async for msg in client.iter_messages(CHANNEL, limit=300):
-            if msg.text and msg.text.startswith(f"NOTE-{device_id}:"):
-                content = msg.text.split(":", 1)[1]
-                notes.append({
-                    "id": msg.id,
-                    "date": msg.date.isoformat(),
-                    "text": content
-                })
-        return jsonify(notes)
+        notes_data = db.reference(f"notes/{device_id}").get()
+        if not notes_data:
+            return jsonify([])
+
+        return jsonify(list(notes_data.values()))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
-# 9. नोट एडिट करना
-@app.route("/api/notes/edit", methods=["POST"])
-async def edit_note():
-    try:
-        data = await request.get_json()
-        device_id = data.get("device_id")
-        note_id = data.get("note_id")
-        new_text = data.get("text")
-
-        if not device_id or not note_id or not new_text:
-            return jsonify({"success": False, "error": "Missing details"}), 400
-
-        await client.edit_message(CHANNEL, int(note_id), f"NOTE-{device_id}:{new_text}")
-        return jsonify({"success": True, "message": "Note updated successfully!"})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-# 10. नोट डिलीट करना
-@app.route("/api/notes/delete", methods=["POST"])
-async def delete_note():
-    try:
-        data = await request.get_json()
-        note_id = data.get("note_id")
-
-        if not note_id:
-            return jsonify({"success": False, "error": "Note ID missing"}), 400
-
-        await client.delete_messages(CHANNEL, [int(note_id)])
-        return jsonify({"success": True, "message": "Note deleted successfully!"})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.before_serving
 async def startup():
     await client.start()
-    try:
-        # इनवाइट लिंक के जरिए प्राइवेट चैनल जॉइन करने का प्रयास
-        await client(ImportChatInviteRequest(INVITE_HASH))
-    except Exception:
-        pass  # यदि अकाउंट पहले से चैनल में है तो एरर स्किप होगा
-    print("Private Cloud Server Ready!", flush=True)
+    print("Private Cloud Server Ready with Firebase!", flush=True)
 
 
 if __name__ == "__main__":
