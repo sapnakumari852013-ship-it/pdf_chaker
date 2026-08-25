@@ -180,13 +180,13 @@ async def delete_photos():
         return jsonify({"error": str(e)}), 500
 
 
-# 7. नोट्स सेव करना (Save Notes)
-@app.route("/api/save_note", methods=["POST"])
+# 7. नोट्स सेव करना (HTML URL match: /api/notes/add)
+@app.route("/api/notes/add", methods=["POST"])
 async def save_note():
     try:
         data = await request.get_json()
         device_id = data.get("device_id")
-        note_content = data.get("note")
+        note_content = data.get("text") or data.get("note")
 
         if not device_id or not note_content:
             return jsonify({"success": False, "error": "Missing Device ID or Note content"}), 400
@@ -197,8 +197,8 @@ async def save_note():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 8. नोट्स फेच करना (Get Notes)
-@app.route("/api/get_notes", methods=["GET"])
+# 8. नोट्स फेच करना (HTML URL match: /api/notes)
+@app.route("/api/notes", methods=["GET"])
 async def get_notes():
     try:
         device_id = request.args.get("device_id", "")
@@ -212,7 +212,7 @@ async def get_notes():
                 notes.append({
                     "id": msg.id,
                     "date": msg.date.isoformat(),
-                    "content": content
+                    "text": content
                 })
         return jsonify(notes)
     except Exception as e:
