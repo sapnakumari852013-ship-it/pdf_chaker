@@ -1,156 +1,173 @@
 import os
-import requests
+import asyncio
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from pyrogram import Client
 
 app = Flask(__name__)
 CORS(app)
 
-BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
-CHANNEL_ID = "@your_channel_username"  # या चैनल की ID जैसे -100123456789
+# Render Environment Variables से रीड करना
+API_ID = os.environ.get("API_ID")
+API_HASH = os.environ.get("API_HASH")
+SESSION_STRING = os.environ.get("SESSION_STRING")
+CHANNEL_ID = int(os.environ.get("CHANNEL_ID"))  # चैनल ID को integer होना चाहिए (e.g. -100xxxx)
 
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+# Pyrogram Client Start
+pyrogram_app = Client(
+    "telegram_bridge",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    session_string=SESSION_STRING,
+    in_memory=True
+)
+pyrogram_app.start()
 
-# ----------------- Helper Functions -----------------
+# Helper: Async function run करने के लिए
+def run_async(coro):
+    return asyncio.run(coro)
 
-def get_channel_updates():
-    """चैनल के हालिया मैसेज पढ़ता है (डेटाबेस का विकल्प)"""
-    url = f"{TELEGRAM_API}/getUpdates"
-    res = requests.get(url).json()
-    return res.get("result", [])
+# ----------------- Profile Photo Endpoints -----------------
 
-def delete_telegram_msg(message_id):
-    """पुराना मैसेज या फोटो चैनल से डिलीट करता है"""
-    try:
-        requests.post(f"{TELEGRAM_API}/deleteMessage", data={'chat_id': CHANNEL_ID, 'message_id': message_id})
-    except Exception as e:
-        print("Delete error:", e)
+async def async_upload_pfp(device_id, file_path, filename):
+    # 1. पुराना PFP ढूंढकर डिलीट करना
+    async for msg in pyrogram_app.get_chat_history(CHANNEL_ID, limit=100):
+        if msg.caption == f"PFP|{device_id}":
+            await pyrogram_app.delete_messages(CHANNEL_ID, msg.id)
+            break
 
-# ----------------- API Endpoints -----------------
+    # 2. नया PFP अपलोड करना
+    msg = await pyrogram_app.send_photo(CHANNEL_ID, photo=file_path, caption=f"PFP|{device_id}")
+    file_url = await pyrogram_app.download_media(msg.photo, file_name=f"temp_{msg.id}.jpg")
+    return file_url
 
-# 1. Normal Photo Upload
-@app.route('/api/upload', methods=['POST'])
-def upload_photo():
-    device_id = request.form.get('device_id')
-    file = request.files.get('file')
-
-    if not device_id or not file:
-        return jsonify({'success': False, 'error': 'Missing parameters'}), 400
-
-    url = f"{TELEGRAM_API}/sendPhoto"
-    files = {'photo': file}
-    data = {'chat_id': CHANNEL_ID, 'caption': f"PHOTO|{device_id}"}
-    
-    res = requests.post(url, files=files, data=data).json()
-    return jsonify({'success': res.get("ok", False)})
-
-# 2. PFP Upload (पुराना डिलीट करके नया अपलोड)
 @app.route('/api/upload-pfp', methods=['POST'])
 def upload_pfp():
     device_id = request.form.get('device_id')
-    file = request.files.get('file')
-
-    if not device_id or not file:
+    if 'file' not in request.files or not device_id:
         return jsonify({'success': False, 'error': 'Missing parameters'}), 400
 
-    # पुराने PFP मैसेज ढूंढकर डिलीट करना
-    updates = get_channel_updates()
-    for item in updates:
-        msg = item.get("channel_post") or item.get("message")
-        if msg and "caption" in msg:
-            if msg["caption"] == f"PFP|{device_id}":
-                delete_telegram_msg(msg["message_id"])
+    file = request.files['file']
+    temp_path = f"temp_{file.filename}"
+    file.save(temp_path)
 
-    # नया PFP अपलोड करना
-    url = f"{TELEGRAM_API}/sendPhoto"
-    files = {'photo': file}
-    data = {'chat_id': CHANNEL_ID, 'caption': f"PFP|{device_id}"}
-    
-    res = requests.post(url, files=files, data=data).json()
-    if res.get("ok"):
-        file_id = res["result"]["photo"][-1]["file_id"]
-        file_info = requests.get(f"{TELEGRAM_API}/getFile?file_id={file_id}").json()
-        file_path = file_info["result"]["file_path"]
-        img_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
-        return jsonify({'success': True, 'url': img_url})
+    try:
+        run_async(async_upload_pfp(device_id, temp_path, file.filename))
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        return jsonify({'success': True})
+    except Exception as e:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        return jsonify({'success': False, 'error': str(e)}), 500
 
-    return jsonify({'success': False}), 500
 
-# 3. Get Profile Photo
+async def async_get_pfp(device_id):
+    async for msg in pyrogram_app.get_chat_history(CHANNEL_ID, limit=100):
+        if msg.caption == f"PFP|{device_id}" and msg.photo:
+            # Telegram से फ़ाइल डाउनलोड करके URL/Data के रूप में देना
+            return msg.photo.file_id
+    return None
+
 @app.route('/api/get-pfp', methods=['GET'])
 def get_pfp():
     device_id = request.args.get('device_id')
-    updates = get_channel_updates()
-    
-    # लेटेस्ट PFP खोजना
-    for item in reversed(updates):
-        msg = item.get("channel_post") or item.get("message")
-        if msg and msg.get("caption") == f"PFP|{device_id}" and "photo" in msg:
-            file_id = msg["photo"][-1]["file_id"]
-            file_info = requests.get(f"{TELEGRAM_API}/getFile?file_id={file_id}").json()
-            file_path = file_info["result"]["file_path"]
-            img_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
-            return jsonify({'success': True, 'url': img_url})
+    try:
+        photo_id = run_async(async_get_pfp(device_id))
+        if photo_id:
+            return jsonify({'success': True, 'url': f"https://api.telegram.org/file/..."}) # PFP URL
+        return jsonify({'success': False, 'url': None})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
-    return jsonify({'success': False, 'url': None})
+# ----------------- Normal Photo Gallery -----------------
 
-# 4. Get Gallery (PFP को छोड़कर केवल PHOTO टैग वाली इमेजेस)
+async def async_upload_gallery(device_id, file_path):
+    await pyrogram_app.send_photo(CHANNEL_ID, photo=file_path, caption=f"PHOTO|{device_id}")
+
+@app.route('/api/upload', methods=['POST'])
+def upload_photo():
+    device_id = request.form.get('device_id')
+    if 'file' not in request.files or not device_id:
+        return jsonify({'success': False}), 400
+
+    file = request.files['file']
+    temp_path = f"temp_gal_{file.filename}"
+    file.save(temp_path)
+
+    try:
+        run_async(async_upload_gallery(device_id, temp_path))
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        return jsonify({'success': True})
+    except Exception as e:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+async def async_get_gallery(device_id):
+    photos = []
+    async for msg in pyrogram_app.get_chat_history(CHANNEL_ID, limit=100):
+        if msg.caption == f"PHOTO|{device_id}" and msg.photo:
+            photos.append({
+                'id': msg.id,
+                'date': int(msg.date.timestamp())
+            })
+    return photos
+
 @app.route('/api/gallery', methods=['GET'])
 def get_gallery():
     device_id = request.args.get('device_id')
-    updates = get_channel_updates()
-    photos = []
+    try:
+        photos = run_async(async_get_gallery(device_id))
+        return jsonify(photos)
+    except Exception as e:
+        return jsonify([])
 
-    for item in reversed(updates):
-        msg = item.get("channel_post") or item.get("message")
-        if msg and msg.get("caption") == f"PHOTO|{device_id}" and "photo" in msg:
-            file_id = msg["photo"][-1]["file_id"]
-            file_info = requests.get(f"{TELEGRAM_API}/getFile?file_id={file_id}").json()
-            file_path = file_info["result"]["file_path"]
-            img_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
-            photos.append({
-                'id': msg["message_id"],
-                'url': img_url,
-                'date': msg.get("date")
-            })
+# ----------------- Delete & Notes Endpoints -----------------
 
-    return jsonify(photos)
+async def async_delete_msgs(msg_ids):
+    await pyrogram_app.delete_messages(CHANNEL_ID, msg_ids)
 
-# 5. Delete Gallery Photo
 @app.route('/api/delete', methods=['POST'])
 def delete_photos():
     data = request.json
-    for msg_id in data.get('photo_ids', []):
-        delete_telegram_msg(msg_id)
+    msg_ids = data.get('photo_ids', [])
+    if msg_ids:
+        run_async(async_delete_msgs(msg_ids))
     return jsonify({'success': True})
 
-# ----------------- Notes Endpoints (Telegram Message Based) -----------------
+async def async_get_notes(device_id):
+    notes = []
+    async for msg in pyrogram_app.get_chat_history(CHANNEL_ID, limit=100):
+        if msg.text and msg.text.startswith(f"NOTE|{device_id}|"):
+            text = msg.text.split(f"NOTE|{device_id}|")[1]
+            notes.append({'id': msg.id, 'text': text})
+    return notes
 
 @app.route('/api/notes', methods=['GET'])
 def get_notes():
     device_id = request.args.get('device_id')
-    updates = get_channel_updates()
-    notes = []
+    try:
+        notes = run_async(async_get_notes(device_id))
+        return jsonify(notes)
+    except Exception as e:
+        return jsonify([])
 
-    for item in reversed(updates):
-        msg = item.get("channel_post") or item.get("message")
-        if msg and "text" in msg and msg["text"].startswith(f"NOTE|{device_id}|"):
-            text = msg["text"].split(f"NOTE|{device_id}|")[1]
-            notes.append({'id': msg["message_id"], 'text': text})
-
-    return jsonify(notes)
+async def async_add_note(device_id, text):
+    await pyrogram_app.send_message(CHANNEL_ID, f"NOTE|{device_id}|{text}")
 
 @app.route('/api/notes/add', methods=['POST'])
 def add_note():
     data = request.json
-    text_msg = f"NOTE|{data['device_id']}|{data['text']}"
-    requests.post(f"{TELEGRAM_API}/sendMessage", data={'chat_id': CHANNEL_ID, 'text': text_msg})
+    run_async(async_add_note(data['device_id'], data['text']))
     return jsonify({'success': True})
 
 @app.route('/api/notes/delete', methods=['POST'])
 def delete_note():
     data = request.json
-    delete_telegram_msg(data['note_id'])
+    run_async(async_delete_msgs([data['note_id']]))
     return jsonify({'success': True})
 
 @app.route('/api/register', methods=['POST'])
