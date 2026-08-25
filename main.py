@@ -180,7 +180,7 @@ async def delete_photos():
         return jsonify({"error": str(e)}), 500
 
 
-# 7. नोट्स सेव करना (HTML URL match: /api/notes/add)
+# 7. नोट्स सेव करना
 @app.route("/api/notes/add", methods=["POST"])
 async def save_note():
     try:
@@ -197,7 +197,7 @@ async def save_note():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 8. नोट्स फेच करना (HTML URL match: /api/notes)
+# 8. नोट्स फेच करना
 @app.route("/api/notes", methods=["GET"])
 async def get_notes():
     try:
@@ -217,6 +217,42 @@ async def get_notes():
         return jsonify(notes)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# 9. नोट एडिट करना (नया रूट)
+@app.route("/api/notes/edit", methods=["POST"])
+async def edit_note():
+    try:
+        data = await request.get_json()
+        device_id = data.get("device_id")
+        note_id = data.get("note_id")
+        new_text = data.get("text")
+
+        if not device_id or not note_id or not new_text:
+            return jsonify({"success": False, "error": "Missing details"}), 400
+
+        # टेलीग्राम चैनल में मौजूद पुराने नोट मैसेज का टेक्स्ट एडिट करना
+        await client.edit_message(CHANNEL, int(note_id), f"NOTE-{device_id}:{new_text}")
+        return jsonify({"success": True, "message": "Note updated successfully!"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# 10. नोट डिलीट करना (नया रूट)
+@app.route("/api/notes/delete", methods=["POST"])
+async def delete_note():
+    try:
+        data = await request.get_json()
+        note_id = data.get("note_id")
+
+        if not note_id:
+            return jsonify({"success": False, "error": "Note ID missing"}), 400
+
+        # टेलीग्राम चैनल से नोट का मैसेज डिलीट करना
+        await client.delete_messages(CHANNEL, [int(note_id)])
+        return jsonify({"success": True, "message": "Note deleted successfully!"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.before_serving
