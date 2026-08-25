@@ -4,6 +4,7 @@ from quart import Quart, jsonify, request
 from quart_cors import cors
 from telethon import TelegramClient
 from telethon.sessions import StringSession
+from telethon.tl.functions.messages import ImportChatInviteRequest
 
 app = Quart(__name__)
 app = cors(app, allow_origin="*")
@@ -11,7 +12,10 @@ app = cors(app, allow_origin="*")
 API_ID = int(os.environ.get("API_ID", 1234567))
 API_HASH = os.environ.get("API_HASH", "YOUR_API_HASH")
 SESSION_STRING = os.environ.get("SESSION_STRING", "YOUR_STRING_SESSION")
-CHANNEL = "sxhckfufig"
+
+# ⚠️ यहाँ अपने प्राइवेट चैनल की -100 वाली ID डालें (बिना Quotes के int रूप में या int में कन्वर्ट करके)
+CHANNEL = int(os.environ.get("CHANNEL_ID", -1001234567890))
+INVITE_HASH = "EG28t-T1YdY0NjA1"  # आपके लिंक का हैश कोड
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
@@ -219,7 +223,7 @@ async def get_notes():
         return jsonify({"error": str(e)}), 500
 
 
-# 9. नोट एडिट करना (नया रूट)
+# 9. नोट एडिट करना
 @app.route("/api/notes/edit", methods=["POST"])
 async def edit_note():
     try:
@@ -231,14 +235,13 @@ async def edit_note():
         if not device_id or not note_id or not new_text:
             return jsonify({"success": False, "error": "Missing details"}), 400
 
-        # टेलीग्राम चैनल में मौजूद पुराने नोट मैसेज का टेक्स्ट एडिट करना
         await client.edit_message(CHANNEL, int(note_id), f"NOTE-{device_id}:{new_text}")
         return jsonify({"success": True, "message": "Note updated successfully!"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 10. नोट डिलीट करना (नया रूट)
+# 10. नोट डिलीट करना
 @app.route("/api/notes/delete", methods=["POST"])
 async def delete_note():
     try:
@@ -248,7 +251,6 @@ async def delete_note():
         if not note_id:
             return jsonify({"success": False, "error": "Note ID missing"}), 400
 
-        # टेलीग्राम चैनल से नोट का मैसेज डिलीट करना
         await client.delete_messages(CHANNEL, [int(note_id)])
         return jsonify({"success": True, "message": "Note deleted successfully!"})
     except Exception as e:
@@ -258,6 +260,11 @@ async def delete_note():
 @app.before_serving
 async def startup():
     await client.start()
+    try:
+        # इनवाइट लिंक के जरिए प्राइवेट चैनल जॉइन करने का प्रयास
+        await client(ImportChatInviteRequest(INVITE_HASH))
+    except Exception:
+        pass  # यदि अकाउंट पहले से चैनल में है तो एरर स्किप होगा
     print("Private Cloud Server Ready!", flush=True)
 
 
