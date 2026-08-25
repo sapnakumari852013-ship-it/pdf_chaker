@@ -162,7 +162,7 @@ async def upload_photo():
         return jsonify({"error": str(e)}), 500
 
 
-# 6. फोटो डिलीट करना
+# 6. फोटो/मैसेज डिलीट करना
 @app.route("/api/delete", methods=["POST"])
 async def delete_photos():
     try:
@@ -172,7 +172,6 @@ async def delete_photos():
         if not photo_ids:
             return jsonify({"error": "No photo IDs provided"}), 400
 
-        # मैसेज आईडी को डिलीट करना
         await client.delete_messages(CHANNEL, photo_ids)
         return jsonify(
             {"success": True, "message": "Photos deleted successfully!"}
@@ -181,10 +180,49 @@ async def delete_photos():
         return jsonify({"error": str(e)}), 500
 
 
+# 7. नोट्स सेव करना (Save Notes)
+@app.route("/api/save_note", methods=["POST"])
+async def save_note():
+    try:
+        data = await request.get_json()
+        device_id = data.get("device_id")
+        note_content = data.get("note")
+
+        if not device_id or not note_content:
+            return jsonify({"success": False, "error": "Missing Device ID or Note content"}), 400
+
+        await client.send_message(CHANNEL, f"NOTE-{device_id}:{note_content}")
+        return jsonify({"success": True, "message": "Note saved successfully!"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# 8. नोट्स फेच करना (Get Notes)
+@app.route("/api/get_notes", methods=["GET"])
+async def get_notes():
+    try:
+        device_id = request.args.get("device_id", "")
+        if not device_id:
+            return jsonify([])
+
+        notes = []
+        async for msg in client.iter_messages(CHANNEL, limit=300):
+            if msg.text and msg.text.startswith(f"NOTE-{device_id}:"):
+                content = msg.text.split(":", 1)[1]
+                notes.append({
+                    "id": msg.id,
+                    "date": msg.date.isoformat(),
+                    "content": content
+                })
+        return jsonify(notes)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.before_serving
 async def startup():
     await client.start()
-    print("Private Gallery Server Ready!", flush=True)
+    print("Private Cloud Server Ready!", flush=True)
 
 
 if __name__ == "__main__":
