@@ -9,6 +9,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 
 app = Quart(__name__)
+# CORS Allow for all origins
 app = cors(app, allow_origin="*")
 
 API_ID = int(os.environ.get("API_ID", 1234567))
@@ -98,7 +99,6 @@ async def upload_photo():
         caption = f"DEV-{device_id}"
         msg = await client.send_file(CHANNEL, img_io, caption=caption, force_document=False)
 
-        # ⚡ Telegram मैसेज स्कैन की जगह Firebase में ID सेव करें
         db.reference(f"photos/{device_id}/{msg.id}").set({
             "id": msg.id,
             "date": msg.date.isoformat(),
@@ -110,7 +110,7 @@ async def upload_photo():
         return jsonify({"error": str(e)}), 500
 
 
-# 4. गैलरी फोटो फेच करना (सुपरफास्ट - Firebase से)
+# 4. गैलरी फोटो फेच करना
 @app.route("/api/gallery", methods=["GET"])
 async def get_gallery():
     try:
@@ -127,7 +127,7 @@ async def get_gallery():
         return jsonify({"error": str(e)}), 500
 
 
-# 5. फोटो डिलीट करना (Telegram + Firebase)
+# 5. फोटो डिलीट करना
 @app.route("/api/delete", methods=["POST"])
 async def delete_photos():
     try:
@@ -201,6 +201,28 @@ async def get_notes():
         return jsonify(list(notes_data.values()))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# 9. नोट्स डिलीट करना (Firebase Database Fix)
+@app.route("/api/notes/delete", methods=["POST", "OPTIONS"])
+async def delete_note():
+    if request.method == "OPTIONS":
+        return "", 200
+
+    try:
+        data = await request.get_json() or {}
+        device_id = data.get("device_id")
+        note_id = data.get("note_id") or data.get("id")
+
+        if not device_id or not note_id:
+            return jsonify({"success": False, "error": "Missing device_id or note_id"}), 400
+
+        # Firebase Realtime Database से सीधे Delete
+        db.reference(f"notes/{device_id}/{note_id}").delete()
+
+        return jsonify({"success": True, "message": "Note deleted successfully!"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.before_serving
