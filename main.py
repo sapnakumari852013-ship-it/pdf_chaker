@@ -79,7 +79,7 @@ async def login_user():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 3. फोटो अपलोड करना (Telegram + Direct Telegram Web Location Link)
+# 3. फोटो अपलोड करना (Telegram + Direct Telegram Private Link)
 @app.route("/api/upload", methods=["POST"])
 async def upload_photo():
     try:
@@ -92,8 +92,8 @@ async def upload_photo():
         if not file or not device_id:
             return jsonify({"success": False, "error": "File or Device ID missing"}), 400
 
-        # Quart के लिए await file.read() जरूरी है ताकि bytes एरर न आए
-        file_bytes = await file.read()
+        # bytes एरर से बचने के लिए यहाँ await नहीं है
+        file_bytes = file.read()
         
         img_io = io.BytesIO(file_bytes)
         img_io.name = file.filename or "photo.jpg"
@@ -101,25 +101,17 @@ async def upload_photo():
         caption = f"DEV-{device_id}"
         msg = await client.send_file(CHANNEL, img_io, caption=caption, force_document=False)
 
-        # डिफ़ॉल्ट लिंक (अगर वेब लोकेशन न मिले)
-        photo_url = f"https://pdf-chaker-1.onrender.com/api/photo/{msg.id}"
-
-        # टेलीग्राम से डायरेक्ट वेब/CDN लिंक जनरेट करना
-        if msg.photo:
-            try:
-                web_loc = await client.get_file_web_location(msg.photo)
-                if web_loc:
-                    photo_url = web_loc
-            except Exception:
-                pass
+        # बिना Render के सीधे टेलीग्राम प्राइवेट चैनल का वेब लिंक
+        clean_channel_id = str(CHANNEL).replace("-100", "")
+        telegram_file_link = f"https://t.me/c/{clean_channel_id}/{msg.id}"
 
         db.reference(f"photos/{device_id}/{msg.id}").set({
             "id": msg.id,
             "date": msg.date.isoformat(),
-            "url": photo_url
+            "url": telegram_file_link
         })
 
-        return jsonify({"success": True, "message": "Photo uploaded successfully!", "url": photo_url})
+        return jsonify({"success": True, "message": "Photo uploaded successfully!", "url": telegram_file_link})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -241,7 +233,7 @@ async def delete_note():
 @app.before_serving
 async def startup():
     await client.start()
-    print("Private Cloud Server Ready with Telegram CDN Links!", flush=True)
+    print("Private Cloud Server Ready with Telegram Links!", flush=True)
 
 
 if __name__ == "__main__":
