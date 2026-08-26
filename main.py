@@ -18,6 +18,9 @@ SESSION_STRING = os.environ.get("SESSION_STRING", "YOUR_STRING_SESSION")
 CHANNEL = int(os.environ.get("CHANNEL_ID", -1001234567890))
 FIREBASE_DB_URL = os.environ.get("FIREBASE_DB_URL")
 
+# चैनल का यूजरनेम (जो आपने पब्लिक किया है)
+CHANNEL_USERNAME = os.environ.get("CHANNEL_USERNAME", "sandeepjee")
+
 # ----------------- FIREBASE SETUP -----------------
 cred_json_str = os.environ.get("FIREBASE_CRED_JSON")
 
@@ -32,10 +35,10 @@ client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 @app.route("/")
 async def home():
-    return "Private Cloud Server Active with Telegram Links!", 200
+    return "Public Telegram Cloud Server Active!", 200
 
 
-# 1. रजिस्टर करना (Firebase DB)
+# 1. रजिस्टर करना
 @app.route("/api/register", methods=["POST"])
 async def register_user():
     try:
@@ -56,7 +59,7 @@ async def register_user():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 2. लॉगिन करना (Firebase DB)
+# 2. लॉगिन करना
 @app.route("/api/login", methods=["POST"])
 async def login_user():
     try:
@@ -79,7 +82,7 @@ async def login_user():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 3. फोटो अपलोड करना (Telegram + Direct Telegram Private Link)
+# 3. फोटो अपलोड करना (Public Telegram Link)
 @app.route("/api/upload", methods=["POST"])
 async def upload_photo():
     try:
@@ -92,26 +95,23 @@ async def upload_photo():
         if not file or not device_id:
             return jsonify({"success": False, "error": "File or Device ID missing"}), 400
 
-        # bytes एरर से बचने के लिए यहाँ await नहीं है
         file_bytes = file.read()
-        
         img_io = io.BytesIO(file_bytes)
         img_io.name = file.filename or "photo.jpg"
 
         caption = f"DEV-{device_id}"
         msg = await client.send_file(CHANNEL, img_io, caption=caption, force_document=False)
 
-        # बिना Render के सीधे टेलीग्राम प्राइवेट चैनल का वेब लिंक
-        clean_channel_id = str(CHANNEL).replace("-100", "")
-        telegram_file_link = f"https://t.me/c/{clean_channel_id}/{msg.id}"
+        # पब्लिक चैनल का डायरेक्ट लिंक
+        public_telegram_link = f"https://t.me/{CHANNEL_USERNAME}/{msg.id}"
 
         db.reference(f"photos/{device_id}/{msg.id}").set({
             "id": msg.id,
             "date": msg.date.isoformat(),
-            "url": telegram_file_link
+            "url": public_telegram_link
         })
 
-        return jsonify({"success": True, "message": "Photo uploaded successfully!", "url": telegram_file_link})
+        return jsonify({"success": True, "message": "Photo uploaded successfully!", "url": public_telegram_link})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -142,7 +142,7 @@ async def delete_photos():
         photo_ids = data.get("photo_ids", [])
 
         if not photo_ids or not device_id:
-            return jsonify({"success": False, "error": "No photo IDs or Device ID provided"}), 400
+            return jsonify({"error": "No photo IDs or Device ID provided"}), 400
 
         await client.delete_messages(CHANNEL, photo_ids)
 
@@ -151,27 +151,10 @@ async def delete_photos():
 
         return jsonify({"success": True, "message": "Photos deleted successfully!"})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
-# 6. फोटो स्ट्रीम करना (बैकअप रूट)
-@app.route("/api/photo/<int:msg_id>", methods=["GET"])
-async def get_photo(msg_id):
-    try:
-        msg = await client.get_messages(CHANNEL, ids=msg_id)
-        if msg and msg.photo:
-            photo_bytes = await client.download_media(msg.photo, file=bytes)
-            return (
-                photo_bytes,
-                200,
-                {"Content-Type": "image/jpeg", "Cache-Control": "max-age=86400"},
-            )
-        return "Photo Not Found", 404
-    except Exception as e:
-        return str(e), 500
-
-
-# 7. नोट्स सेव करना (Firebase)
+# 6. नोट्स सेव करना
 @app.route("/api/notes/add", methods=["POST"])
 async def save_note():
     try:
@@ -192,7 +175,7 @@ async def save_note():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 8. नोट्स फेच करना (Firebase)
+# 7. नोट्स फेच करना
 @app.route("/api/notes", methods=["GET"])
 async def get_notes():
     try:
@@ -209,7 +192,7 @@ async def get_notes():
         return jsonify({"error": str(e)}), 500
 
 
-# 9. नोट्स डिलीट करना
+# 8. नोट्स डिलीट करना
 @app.route("/api/notes/delete", methods=["POST", "OPTIONS"])
 async def delete_note():
     if request.method == "OPTIONS":
@@ -227,13 +210,13 @@ async def delete_note():
 
         return jsonify({"success": True, "message": "Note deleted successfully!"})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 @app.before_serving
 async def startup():
     await client.start()
-    print("Private Cloud Server Ready with Telegram Links!", flush=True)
+    print("Cloud Server Ready with Public Telegram Links!", flush=True)
 
 
 if __name__ == "__main__":
