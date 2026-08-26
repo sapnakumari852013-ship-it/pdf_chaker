@@ -32,7 +32,7 @@ client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 @app.route("/")
 async def home():
-    return "Private Cloud Server Active with Firebase!", 200
+    return "Private Cloud Server Active with Telegram Links!", 200
 
 
 # 1. रजिस्टर करना (Firebase DB)
@@ -79,7 +79,7 @@ async def login_user():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 3. फोटो अपलोड करना (Telegram + Firebase) - [एरर फिक्स किया गया]
+# 3. फोटो अपलोड करना (Telegram + Direct Telegram Web Location Link)
 @app.route("/api/upload", methods=["POST"])
 async def upload_photo():
     try:
@@ -92,8 +92,8 @@ async def upload_photo():
         if not file or not device_id:
             return jsonify({"success": False, "error": "File or Device ID missing"}), 400
 
-        # यहाँ await हटा दिया गया है ताकि 'bytes' object error न आए
-        file_bytes = file.read()
+        # Quart के लिए await file.read() जरूरी है ताकि bytes एरर न आए
+        file_bytes = await file.read()
         
         img_io = io.BytesIO(file_bytes)
         img_io.name = file.filename or "photo.jpg"
@@ -101,13 +101,25 @@ async def upload_photo():
         caption = f"DEV-{device_id}"
         msg = await client.send_file(CHANNEL, img_io, caption=caption, force_document=False)
 
+        # डिफ़ॉल्ट लिंक (अगर वेब लोकेशन न मिले)
+        photo_url = f"https://pdf-chaker-1.onrender.com/api/photo/{msg.id}"
+
+        # टेलीग्राम से डायरेक्ट वेब/CDN लिंक जनरेट करना
+        if msg.photo:
+            try:
+                web_loc = await client.get_file_web_location(msg.photo)
+                if web_loc:
+                    photo_url = web_loc
+            except Exception:
+                pass
+
         db.reference(f"photos/{device_id}/{msg.id}").set({
             "id": msg.id,
             "date": msg.date.isoformat(),
-            "url": f"https://pdf-chaker-1.onrender.com/api/photo/{msg.id}"
+            "url": photo_url
         })
 
-        return jsonify({"success": True, "message": "Photo uploaded successfully!"})
+        return jsonify({"success": True, "message": "Photo uploaded successfully!", "url": photo_url})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -150,7 +162,7 @@ async def delete_photos():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 6. फोटो स्ट्रीम करना
+# 6. फोटो स्ट्रीम करना (बैकअप रूट)
 @app.route("/api/photo/<int:msg_id>", methods=["GET"])
 async def get_photo(msg_id):
     try:
@@ -205,7 +217,7 @@ async def get_notes():
         return jsonify({"error": str(e)}), 500
 
 
-# 9. नोट्स डिलीट करना (Firebase Database Fix)
+# 9. नोट्स डिलीट करना
 @app.route("/api/notes/delete", methods=["POST", "OPTIONS"])
 async def delete_note():
     if request.method == "OPTIONS":
@@ -229,7 +241,7 @@ async def delete_note():
 @app.before_serving
 async def startup():
     await client.start()
-    print("Private Cloud Server Ready with Firebase!", flush=True)
+    print("Private Cloud Server Ready with Telegram CDN Links!", flush=True)
 
 
 if __name__ == "__main__":
