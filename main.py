@@ -17,7 +17,6 @@ API_HASH = os.environ.get("API_HASH", "YOUR_API_HASH")
 SESSION_STRING = os.environ.get("SESSION_STRING", "YOUR_STRING_SESSION")
 CHANNEL = int(os.environ.get("CHANNEL_ID", -1001234567890))
 FIREBASE_DB_URL = os.environ.get("FIREBASE_DB_URL")
-RENDER_URL = os.environ.get("RENDER_URL", "https://pdf-chaker-1.onrender.com")
 
 # ----------------- FIREBASE SETUP -----------------
 cred_json_str = os.environ.get("FIREBASE_CRED_JSON")
@@ -33,7 +32,7 @@ client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 @app.route("/")
 async def home():
-    return "Private Cloud Server Active with Telegram CDN Links!", 200
+    return "Private Cloud Server Active with Firebase!", 200
 
 
 # 1. रजिस्टर करना (Firebase DB)
@@ -80,7 +79,7 @@ async def login_user():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 3. फोटो अपलोड करना (Telegram + Web Location / CDN URL)
+# 3. फोटो अपलोड करना (Telegram + Firebase) - [एरर फिक्स किया गया]
 @app.route("/api/upload", methods=["POST"])
 async def upload_photo():
     try:
@@ -91,37 +90,26 @@ async def upload_photo():
         file = files.get("file")
 
         if not file or not device_id:
-            return jsonify({"error": "File or Device ID missing"}), 400
+            return jsonify({"success": False, "error": "File or Device ID missing"}), 400
 
-        file_bytes = await file.read()
+        # यहाँ await हटा दिया गया है ताकि 'bytes' object error न आए
+        file_bytes = file.read()
+        
         img_io = io.BytesIO(file_bytes)
         img_io.name = file.filename or "photo.jpg"
 
         caption = f"DEV-{device_id}"
-        # फोटो को प्राइवेट चैनल पर भेजा गया
         msg = await client.send_file(CHANNEL, img_io, caption=caption, force_document=False)
-
-        cdn_url = f"{RENDER_URL}/api/photo/{msg.id}"
-        
-        # यदि मैसेज में फोटो है, तो टेलीथॉन से उसका वेब लोकेशन (CDN लिंक) जनरेट करने की कोशिश करें
-        if msg.photo:
-            try:
-                web_loc = await client.get_file_web_location(msg.photo)
-                if web_loc:
-                    cdn_url = web_loc
-            except Exception:
-                # अगर किसी वजह से डायरेक्ट वेब लोकेशन न मिले, तो बैकअप के लिए हमारा स्ट्रीम रूट काम करेगा
-                pass
 
         db.reference(f"photos/{device_id}/{msg.id}").set({
             "id": msg.id,
             "date": msg.date.isoformat(),
-            "url": cdn_url
+            "url": f"https://pdf-chaker-1.onrender.com/api/photo/{msg.id}"
         })
 
-        return jsonify({"success": True, "message": "Photo uploaded successfully!", "url": cdn_url})
+        return jsonify({"success": True, "message": "Photo uploaded successfully!"})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # 4. गैलरी फोटो फेच करना
@@ -150,7 +138,7 @@ async def delete_photos():
         photo_ids = data.get("photo_ids", [])
 
         if not photo_ids or not device_id:
-            return jsonify({"error": "No photo IDs or Device ID provided"}), 400
+            return jsonify({"success": False, "error": "No photo IDs or Device ID provided"}), 400
 
         await client.delete_messages(CHANNEL, photo_ids)
 
@@ -159,10 +147,10 @@ async def delete_photos():
 
         return jsonify({"success": True, "message": "Photos deleted successfully!"})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 6. फोटो स्ट्रीम करना (बैकअप रूट - यदि डायरेक्ट CDN लिंक न बने)
+# 6. फोटो स्ट्रीम करना
 @app.route("/api/photo/<int:msg_id>", methods=["GET"])
 async def get_photo(msg_id):
     try:
@@ -217,7 +205,7 @@ async def get_notes():
         return jsonify({"error": str(e)}), 500
 
 
-# 9. नोट्स डिलीट करना
+# 9. नोट्स डिलीट करना (Firebase Database Fix)
 @app.route("/api/notes/delete", methods=["POST", "OPTIONS"])
 async def delete_note():
     if request.method == "OPTIONS":
@@ -235,13 +223,13 @@ async def delete_note():
 
         return jsonify({"success": True, "message": "Note deleted successfully!"})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.before_serving
 async def startup():
     await client.start()
-    print("Private Cloud Server Ready with CDN Links!", flush=True)
+    print("Private Cloud Server Ready with Firebase!", flush=True)
 
 
 if __name__ == "__main__":
