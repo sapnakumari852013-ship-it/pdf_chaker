@@ -1,4 +1,4 @@
-import io
+Import io
 import json
 import os
 import firebase_admin
@@ -18,9 +18,6 @@ SESSION_STRING = os.environ.get("SESSION_STRING", "YOUR_STRING_SESSION")
 CHANNEL = int(os.environ.get("CHANNEL_ID", -1001234567890))
 FIREBASE_DB_URL = os.environ.get("FIREBASE_DB_URL")
 
-# चैनल का यूजरनेम (जो आपने पब्लिक किया है)
-CHANNEL_USERNAME = os.environ.get("CHANNEL_USERNAME", "sandeepjee")
-
 # ----------------- FIREBASE SETUP -----------------
 cred_json_str = os.environ.get("FIREBASE_CRED_JSON")
 
@@ -35,10 +32,10 @@ client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 @app.route("/")
 async def home():
-    return "Public Telegram Cloud Server Active!", 200
+    return "Private Cloud Server Active with Firebase!", 200
 
 
-# 1. रजिस्टर करना
+# 1. रजिस्टर करना (Firebase DB)
 @app.route("/api/register", methods=["POST"])
 async def register_user():
     try:
@@ -59,7 +56,7 @@ async def register_user():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 2. लॉगिन करना
+# 2. लॉगिन करना (Firebase DB)
 @app.route("/api/login", methods=["POST"])
 async def login_user():
     try:
@@ -82,7 +79,7 @@ async def login_user():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 3. फोटो अपलोड करना (Public Telegram Link)
+# 3. फोटो अपलोड करना (Telegram + Firebase)
 @app.route("/api/upload", methods=["POST"])
 async def upload_photo():
     try:
@@ -93,7 +90,7 @@ async def upload_photo():
         file = files.get("file")
 
         if not file or not device_id:
-            return jsonify({"success": False, "error": "File or Device ID missing"}), 400
+            return jsonify({"error": "File or Device ID missing"}), 400
 
         file_bytes = file.read()
         img_io = io.BytesIO(file_bytes)
@@ -102,18 +99,15 @@ async def upload_photo():
         caption = f"DEV-{device_id}"
         msg = await client.send_file(CHANNEL, img_io, caption=caption, force_document=False)
 
-        # पब्लिक चैनल का डायरेक्ट लिंक
-        public_telegram_link = f"https://t.me/{CHANNEL_USERNAME}/{msg.id}"
-
         db.reference(f"photos/{device_id}/{msg.id}").set({
             "id": msg.id,
             "date": msg.date.isoformat(),
-            "url": public_telegram_link
+            "url": f"https://pdf-chaker-1.onrender.com/api/photo/{msg.id}"
         })
 
-        return jsonify({"success": True, "message": "Photo uploaded successfully!", "url": public_telegram_link})
+        return jsonify({"success": True, "message": "Photo uploaded successfully!"})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 # 4. गैलरी फोटो फेच करना
@@ -154,7 +148,24 @@ async def delete_photos():
         return jsonify({"error": str(e)}), 500
 
 
-# 6. नोट्स सेव करना
+# 6. फोटो स्ट्रीम करना
+@app.route("/api/photo/<int:msg_id>", methods=["GET"])
+async def get_photo(msg_id):
+    try:
+        msg = await client.get_messages(CHANNEL, ids=msg_id)
+        if msg and msg.photo:
+            photo_bytes = await client.download_media(msg.photo, file=bytes)
+            return (
+                photo_bytes,
+                200,
+                {"Content-Type": "image/jpeg", "Cache-Control": "max-age=86400"},
+            )
+        return "Photo Not Found", 404
+    except Exception as e:
+        return str(e), 500
+
+
+# 7. नोट्स सेव करना (Firebase)
 @app.route("/api/notes/add", methods=["POST"])
 async def save_note():
     try:
@@ -175,7 +186,7 @@ async def save_note():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 7. नोट्स फेच करना
+# 8. नोट्स फेच करना (Firebase)
 @app.route("/api/notes", methods=["GET"])
 async def get_notes():
     try:
@@ -192,7 +203,7 @@ async def get_notes():
         return jsonify({"error": str(e)}), 500
 
 
-# 8. नोट्स डिलीट करना
+# 9. नोट्स डिलीट करना (Firebase Database Fix)
 @app.route("/api/notes/delete", methods=["POST", "OPTIONS"])
 async def delete_note():
     if request.method == "OPTIONS":
@@ -206,17 +217,18 @@ async def delete_note():
         if not device_id or not note_id:
             return jsonify({"success": False, "error": "Missing device_id or note_id"}), 400
 
+        # Firebase Realtime Database से सीधे Delete
         db.reference(f"notes/{device_id}/{note_id}").delete()
 
         return jsonify({"success": True, "message": "Note deleted successfully!"})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.before_serving
 async def startup():
     await client.start()
-    print("Cloud Server Ready with Public Telegram Links!", flush=True)
+    print("Private Cloud Server Ready with Firebase!", flush=True)
 
 
 if __name__ == "__main__":
@@ -226,4 +238,4 @@ if __name__ == "__main__":
 
     config = Config()
     config.bind = [f"0.0.0.0:{os.environ.get('PORT', 10000)}"]
-    asyncio.run(hypercorn.asyncio.serve(app, config))
+    asyncio.run(hypercorn.asyncio.serve(app, config))  ya hai mera code ky ya sahi hai direct Telegram sa link ban raha hsi?
