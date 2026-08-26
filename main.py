@@ -32,7 +32,7 @@ client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 @app.route("/")
 async def home():
-    return "Private Cloud Server Active with Firebase!", 200
+    return "Private Cloud Server Active with Direct Telegram Links!", 200
 
 
 # 1. रजिस्टर करना (Firebase DB)
@@ -79,7 +79,7 @@ async def login_user():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 3. फोटो अपलोड करना (Telegram + Firebase)
+# 3. फोटो अपलोड करना (Telegram + Direct Web URL Generation)
 @app.route("/api/upload", methods=["POST"])
 async def upload_photo():
     try:
@@ -97,15 +97,33 @@ async def upload_photo():
         img_io.name = file.filename or "photo.jpg"
 
         caption = f"DEV-{device_id}"
+        # फोटो को चैनल पर भेजें
         msg = await client.send_file(CHANNEL, img_io, caption=caption, force_document=False)
+
+        # Telegram से डायरेक्ट वेब लिंक (Public/Web URL) प्राप्त करें
+        # Telethon में .media.document या .photo से डायरेक्ट लिंक्स निकाले जा सकते हैं या Web File API इस्तेमाल होती है
+        # चूंकि चैनल पब्लिक होना चाहिए ताकि डायरेक्ट लिंक काम करे, हम टेलीग्राम का सीधा फाइल वेब यूआरएल बना रहे हैं:
+        
+        # अगर आपका चैनल पब्लिक है (जैसे @username वाला):
+        # डायरेक्ट लिंक का फॉर्मेट: https://t.me/c/CHANNEL_ID/MSG_ID (लेकिन प्राइवेट चैनल के लिए वेब प्रीव्यू काम नहीं करता)
+        
+        # इसलिए सबसे बेस्ट तरीका: हम फाइल का डायरेक्ट CDN लिंक निकाल सकते हैं या बॉट के जरिए फेच कर सकते हैं:
+        file_web_url = await client.get_file_web_location(msg.photo) if hasattr(msg, 'photo') and msg.photo else None
+        
+        # यदि डायरेक्ट वेब लोकेशन नहीं मिलती, तो हम सुरक्षित रूप से टेलीथॉन का फाइल एक्सपोर्ट लिंक या फाइल आईडी सेव करेंगे
+        # पर चूंकि आप क्रोम में डायरेक्ट खोलना चाहते हैं, चैनल को 'Public' रखना जरूरी है ताकि t.me लिंक सीधे क्रोम में खुले।
+        
+        # मान लीजिए आपका चैनल पब्लिक है और उसका यूजरनेम 'my_photo_channel_xyz' है:
+        CHANNEL_USERNAME = os.environ.get("CHANNEL_USERNAME", "your_channel_username")
+        direct_url = f"https://t.me/{CHANNEL_USERNAME}/{msg.id}"
 
         db.reference(f"photos/{device_id}/{msg.id}").set({
             "id": msg.id,
             "date": msg.date.isoformat(),
-            "url": f"https://pdf-chaker-1.onrender.com/api/photo/{msg.id}"
+            "url": direct_url  # अब यह सीधा टेलीग्राम का लिंक है!
         })
 
-        return jsonify({"success": True, "message": "Photo uploaded successfully!"})
+        return jsonify({"success": True, "message": "Photo uploaded successfully!", "url": direct_url})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -148,21 +166,7 @@ async def delete_photos():
         return jsonify({"error": str(e)}), 500
 
 
-# 6. फोटो स्ट्रीम करना
-@app.route("/api/photo/<int:msg_id>", methods=["GET"])
-async def get_photo(msg_id):
-    try:
-        msg = await client.get_messages(CHANNEL, ids=msg_id)
-        if msg and msg.photo:
-            photo_bytes = await client.download_media(msg.photo, file=bytes)
-            return (
-                photo_bytes,
-                200,
-                {"Content-Type": "image/jpeg", "Cache-Control": "max-age=86400"},
-            )
-        return "Photo Not Found", 404
-    except Exception as e:
-        return str(e), 500
+# (Note: अब /api/photo/<int:msg_id> रूट की जरूरत नहीं है क्योंकि फोटो सीधा टेलीग्राम पर खुलेगी!)
 
 
 # 7. नोट्स सेव करना (Firebase)
@@ -203,7 +207,7 @@ async def get_notes():
         return jsonify({"error": str(e)}), 500
 
 
-# 9. नोट्स डिलीट करना (Firebase Database Fix)
+# 9. नोट्स डिलीट करना
 @app.route("/api/notes/delete", methods=["POST", "OPTIONS"])
 async def delete_note():
     if request.method == "OPTIONS":
@@ -217,18 +221,17 @@ async def delete_note():
         if not device_id or not note_id:
             return jsonify({"success": False, "error": "Missing device_id or note_id"}), 400
 
-        # Firebase Realtime Database से सीधे Delete
         db.reference(f"notes/{device_id}/{note_id}").delete()
 
         return jsonify({"success": True, "message": "Note deleted successfully!"})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 
 @app.before_serving
 async def startup():
     await client.start()
-    print("Private Cloud Server Ready with Firebase!", flush=True)
+    print("Private Cloud Server Ready with Direct Telegram Links!", flush=True)
 
 
 if __name__ == "__main__":
