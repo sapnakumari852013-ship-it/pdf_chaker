@@ -16,6 +16,7 @@ API_ID = int(os.environ.get("API_ID", 1234567))
 API_HASH = os.environ.get("API_HASH", "YOUR_API_HASH")
 SESSION_STRING = os.environ.get("SESSION_STRING", "YOUR_STRING_SESSION")
 CHANNEL = int(os.environ.get("CHANNEL_ID", -1001234567890))
+CHANNEL_USERNAME = os.environ.get("CHANNEL_USERNAME", "your_channel_username")
 FIREBASE_DB_URL = os.environ.get("FIREBASE_DB_URL")
 
 # ----------------- FIREBASE SETUP -----------------
@@ -79,7 +80,7 @@ async def login_user():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 3. फोटो अपलोड करना (Telegram + Direct Web URL Generation)
+# 3. फोटो अपलोड करना (Telegram + Direct Telegram Link)
 @app.route("/api/upload", methods=["POST"])
 async def upload_photo():
     try:
@@ -90,42 +91,31 @@ async def upload_photo():
         file = files.get("file")
 
         if not file or not device_id:
-            return jsonify({"error": "File or Device ID missing"}), 400
+            return jsonify({"success": False, "error": "File or Device ID missing"}), 400
 
-        file_bytes = file.read()
+        # बाइट्स को सुरक्षित रूप से रीड करना
+        file_bytes = await file.read()
         img_io = io.BytesIO(file_bytes)
         img_io.name = file.filename or "photo.jpg"
 
         caption = f"DEV-{device_id}"
-        # फोटो को चैनल पर भेजें
+        
+        # टेलीग्राम चैनल पर फोटो भेजना
         msg = await client.send_file(CHANNEL, img_io, caption=caption, force_document=False)
 
-        # Telegram से डायरेक्ट वेब लिंक (Public/Web URL) प्राप्त करें
-        # Telethon में .media.document या .photo से डायरेक्ट लिंक्स निकाले जा सकते हैं या Web File API इस्तेमाल होती है
-        # चूंकि चैनल पब्लिक होना चाहिए ताकि डायरेक्ट लिंक काम करे, हम टेलीग्राम का सीधा फाइल वेब यूआरएल बना रहे हैं:
-        
-        # अगर आपका चैनल पब्लिक है (जैसे @username वाला):
-        # डायरेक्ट लिंक का फॉर्मेट: https://t.me/c/CHANNEL_ID/MSG_ID (लेकिन प्राइवेट चैनल के लिए वेब प्रीव्यू काम नहीं करता)
-        
-        # इसलिए सबसे बेस्ट तरीका: हम फाइल का डायरेक्ट CDN लिंक निकाल सकते हैं या बॉट के जरिए फेच कर सकते हैं:
-        file_web_url = await client.get_file_web_location(msg.photo) if hasattr(msg, 'photo') and msg.photo else None
-        
-        # यदि डायरेक्ट वेब लोकेशन नहीं मिलती, तो हम सुरक्षित रूप से टेलीथॉन का फाइल एक्सपोर्ट लिंक या फाइल आईडी सेव करेंगे
-        # पर चूंकि आप क्रोम में डायरेक्ट खोलना चाहते हैं, चैनल को 'Public' रखना जरूरी है ताकि t.me लिंक सीधे क्रोम में खुले।
-        
-        # मान लीजिए आपका चैनल पब्लिक है और उसका यूजरनेम 'my_photo_channel_xyz' है:
-        CHANNEL_USERNAME = os.environ.get("CHANNEL_USERNAME", "your_channel_username")
+        # सीधा टेलीग्राम का पब्लिक लिंक बनाना
         direct_url = f"https://t.me/{CHANNEL_USERNAME}/{msg.id}"
 
+        # Firebase में सेव करना
         db.reference(f"photos/{device_id}/{msg.id}").set({
             "id": msg.id,
             "date": msg.date.isoformat(),
-            "url": direct_url  # अब यह सीधा टेलीग्राम का लिंक है!
+            "url": direct_url
         })
 
         return jsonify({"success": True, "message": "Photo uploaded successfully!", "url": direct_url})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # 4. गैलरी फोटो फेच करना
@@ -154,7 +144,7 @@ async def delete_photos():
         photo_ids = data.get("photo_ids", [])
 
         if not photo_ids or not device_id:
-            return jsonify({"error": "No photo IDs or Device ID provided"}), 400
+            return jsonify({"success": False, "error": "No photo IDs or Device ID provided"}), 400
 
         await client.delete_messages(CHANNEL, photo_ids)
 
@@ -163,10 +153,7 @@ async def delete_photos():
 
         return jsonify({"success": True, "message": "Photos deleted successfully!"})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-# (Note: अब /api/photo/<int:msg_id> रूट की जरूरत नहीं है क्योंकि फोटो सीधा टेलीग्राम पर खुलेगी!)
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # 7. नोट्स सेव करना (Firebase)
@@ -225,7 +212,7 @@ async def delete_note():
 
         return jsonify({"success": True, "message": "Note deleted successfully!"})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.before_serving
