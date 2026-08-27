@@ -238,4 +238,4 @@ if __name__ == "__main__":
 
     config = Config()
     config.bind = [f"0.0.0.0:{os.environ.get('PORT', 10000)}"]
-    asyncio.run(hypercorn.asyncio.serve(app, config))  ya hai mera code ky ya sahi hai direct Telegram sa link ban raha hsi?
+    asyncio.run(hypercorn.asyncio.serve(app, config))
