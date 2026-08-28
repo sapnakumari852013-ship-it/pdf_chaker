@@ -28,14 +28,13 @@ if cred_json_str and not firebase_admin._apps:
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-# ग्लोबल वेरिएबल यह देखने के लिए कि HTML खुला है या नहीं
 last_heartbeat_time = time.time()
 
 # ----------------- HEARTBEAT & AUTO CLEANUP -----------------
 @app.route("/api/heartbeat", methods=["POST"])
 async def heartbeat():
     global last_heartbeat_time
-    last_heartbeat_time = time.time() # जैसे ही HTML पिंग करेगा, टाइम अपडेट हो जाएगा
+    last_heartbeat_time = time.time()
     return jsonify({"status": "active"})
 
 async def periodic_cleanup():
@@ -43,12 +42,10 @@ async def periodic_cleanup():
     while True:
         await asyncio.sleep(30)
         try:
-            # यदि पिछले 45 सेकंड में HTML से कोई पिंग नहीं आया, तो इसका मतलब HTML बंद है!
             if time.time() - last_heartbeat_time > 45:
-                print("[Auto-Cleanup] HTML is closed. Skipping cleanup to save resources.", flush=True)
+                print("[Auto-Cleanup] HTML is closed. Skipping cleanup.", flush=True)
                 continue
             
-            # अगर HTML खुला है, तभी क्लीनर काम करेगा
             gc.collect()
             print("[Auto-Cleanup] HTML is OPEN. RAM cache cleared.", flush=True)
         except Exception as e:
@@ -207,9 +204,12 @@ async def delete_note():
     if request.method == "OPTIONS": return "", 200
     try:
         data = await request.get_json() or {}
-        db.reference(f"notes/{data.get('device_id')}/{data.get('note_id') or data.get('id')}").delete()
+        device_id = data.get("device_id")
+        note_id = data.get("note_id") or data.get("id")
+        if not device_id or not note_id:
+            return jsonify({"success": False, "error": "Missing data"}), 400
+        db.reference(f"notes/{device_id}/{note_id}").delete()
         return jsonify({"success": True, "message": "Deleted!"})
-    except Controls... if needed...
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
