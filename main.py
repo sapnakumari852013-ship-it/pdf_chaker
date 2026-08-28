@@ -1,6 +1,8 @@
 import io
 import json
 import os
+import asyncio
+import gc
 import firebase_admin
 from firebase_admin import credentials, db
 from quart import Quart, jsonify, request
@@ -30,9 +32,23 @@ if cred_json_str and not firebase_admin._apps:
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 
+# ----------------- AUTO CLEANUP TASK (हर 30 सेकंड) -----------------
+async def periodic_cleanup():
+    while True:
+        try:
+            # RAM और टेम्परेरी जंक को साफ़ करना
+            gc.collect()
+            print("[Auto-Cleanup] RAM cache cleared to save Render memory.", flush=True)
+        except Exception as e:
+            print(f"[Auto-Cleanup Error]: {e}", flush=True)
+        
+        await asyncio.sleep(30)
+# ------------------------------------------------------------------
+
+
 @app.route("/")
 async def home():
-    return "Private Cloud Server Active with Firebase!", 200
+    return "Private Cloud Server Active with Firebase & Auto-Cleanup!", 200
 
 
 # 1. रजिस्टर करना (Firebase DB)
@@ -79,7 +95,7 @@ async def login_user():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-# 3. फोटो अपलोड करना (Telegram + Firebase)
+# 3. फोटो/वीडियो अपलोड करना (Telegram + Firebase)
 @app.route("/api/upload", methods=["POST"])
 async def upload_photo():
     try:
@@ -94,7 +110,7 @@ async def upload_photo():
 
         file_bytes = file.read()
         img_io = io.BytesIO(file_bytes)
-        img_io.name = file.filename or "photo.jpg"
+        img_io.name = file.filename or "media.jpg"
 
         caption = f"DEV-{device_id}"
         msg = await client.send_file(CHANNEL, img_io, caption=caption, force_document=False)
@@ -105,29 +121,50 @@ async def upload_photo():
             "url": f"https://pdf-chaker-1.onrender.com/api/photo/{msg.id}"
         })
 
-        return jsonify({"success": True, "message": "Photo uploaded successfully!"})
+        # तुरंत रैम साफ़ करना ताकि अपलोड के बाद मेमोरी होल्ड न रहे
+        del file_bytes
+        del img_io
+        gc.collect()
+
+        return jsonify({"success": True, "message": "Media uploaded successfully!"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-# 4. गैलरी फोटो फेच करना
+# 4. गैलरी फोटो फेच करना (Pagination: 12 photos per request)
 @app.route("/api/gallery", methods=["GET"])
 async def get_gallery():
     try:
         device_id = request.args.get("device_id", "")
         if not device_id:
-            return jsonify([])
+            return jsonify({"photos": [], "has_more": False})
+
+        page = int(request.args.get("page", 1))
+        limit = int(request.args.get("limit", 12))
 
         photos_data = db.reference(f"photos/{device_id}").get()
         if not photos_data:
-            return jsonify([])
+            return jsonify({"photos": [], "has_more": False})
 
-        return jsonify(list(photos_data.values()))
+        photos_list = list(photos_data.values())
+        photos_list.reverse()
+
+        start_idx = (page - 1) * limit
+        end_idx = start_idx + limit
+        
+        paginated_photos = photos_list[start_idx:end_idx]
+        has_more = end_idx < len(photos_list)
+
+        return jsonify({
+            "photos": paginated_photos,
+            "has_more": has_more,
+            "total": len(photos_list)
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-# 5. फोटो डिलीट करना
+# 5. फोटो/वीडियो डिलीट करना
 @app.route("/api/delete", methods=["POST"])
 async def delete_photos():
     try:
@@ -143,24 +180,39 @@ async def delete_photos():
         for pid in photo_ids:
             db.reference(f"photos/{device_id}/{pid}").delete()
 
-        return jsonify({"success": True, "message": "Photos deleted successfully!"})
+        return jsonify({"success": True, "message": "Files deleted successfully!"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-# 6. फोटो स्ट्रीम करना
+# 6. मीडिया (फोटो या वीडियो) स्ट्रीम करना
 @app.route("/api/photo/<int:msg_id>", methods=["GET"])
 async def get_photo(msg_id):
     try:
         msg = await client.get_messages(CHANNEL, ids=msg_id)
-        if msg and msg.photo:
-            photo_bytes = await client.download_media(msg.photo, file=bytes)
-            return (
-                photo_bytes,
+        if msg and (msg.photo or msg.document):
+            file_bytes = await client.download_media(msg, file=bytes)
+            
+            content_type = "image/jpeg"
+            if msg.document:
+                for attr in msg.document.attributes:
+                    if hasattr(attr, 'file_name') and attr.file_name:
+                        fname = attr.file_name.lower()
+                        if fname.endswith(('.mp4', '.mov', '.webm', '.mkv', '.avi')):
+                            content_type = "video/mp4"
+            
+            response_data = (
+                file_bytes,
                 200,
-                {"Content-Type": "image/jpeg", "Cache-Control": "max-age=86400"},
+                {"Content-Type": content_type, "Cache-Control": "max-age=86400"},
             )
-        return "Photo Not Found", 404
+            
+            # भेजने के तुरंत बाद रैम खाली करना
+            del file_bytes
+            gc.collect()
+            return response_data
+
+        return "Media Not Found", 404
     except Exception as e:
         return str(e), 500
 
@@ -203,7 +255,7 @@ async def get_notes():
         return jsonify({"error": str(e)}), 500
 
 
-# 9. नोट्स डिलीट करना (Firebase Database Fix)
+# 9. नोट्स डिलीट करना (Firebase Database)
 @app.route("/api/notes/delete", methods=["POST", "OPTIONS"])
 async def delete_note():
     if request.method == "OPTIONS":
@@ -217,7 +269,6 @@ async def delete_note():
         if not device_id or not note_id:
             return jsonify({"success": False, "error": "Missing device_id or note_id"}), 400
 
-        # Firebase Realtime Database से सीधे Delete
         db.reference(f"notes/{device_id}/{note_id}").delete()
 
         return jsonify({"success": True, "message": "Note deleted successfully!"})
@@ -228,11 +279,12 @@ async def delete_note():
 @app.before_serving
 async def startup():
     await client.start()
-    print("Private Cloud Server Ready with Firebase!", flush=True)
+    # बैकग्राउंड क्लीनर को शुरू करना
+    asyncio.create_task(periodic_cleanup())
+    print("Private Cloud Server Ready with Firebase, Pagination & Auto-Cleanup!", flush=True)
 
 
 if __name__ == "__main__":
-    import asyncio
     import hypercorn.asyncio
     from hypercorn.config import Config
 
